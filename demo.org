@@ -17,7 +17,7 @@ The paragraph after a table remains ordinary text.
 #+name: mixed-scripts
 | Kind      | Example | What to inspect |
 |-----------+---------+-----------------|
-| CJK       | 中文 English 日本語 한국어，。「全角」！？ | Borders stay aligned across full-width characters. |
+| CJK       | 中文 English 日本語 한국어，。「全角」！？ | Columns stay aligned across full-width characters. |
 | Emoji     | 👨‍👩‍👧‍👦 developer 👩🏽‍💻 rainbow 🏳️‍🌈 | A grapheme cluster must not be split while wrapping. |
 | Combining | café café naïve naïve á̧ | Precomposed and combining forms have stable widths. |
 | RTL       | English العربية مرحبا بالعالم English | Bidirectional text remains in the expected order. |
@@ -100,7 +100,7 @@ One-column and single-row tables are useful edge cases:
 * Wrapping in a narrow window
 
 Resize the window or increase text scale while looking at this table.  The
-content should reflow on idle without losing table borders or cell faces.
+content should reflow on idle without losing the table shape or cell faces.
 
 #+name: narrow-window
 | Topic             | Long description                                                                                                                                                    | URL                                                                              |
@@ -166,7 +166,8 @@ This paragraph immediately follows the second table.
 * Quick controls
 
 - =M-x org-table-widget-mode=: enable or disable rendering in this buffer.
-- =M-x org-table-widget-toggle=: reveal or render the table at point.
+- =M-x org-table-widget-toggle=: reveal the whole table at point as source, or
+  render it again. The row under point stays source either way.
 - =M-x org-table-widget-refresh=: redraw every table in the buffer.
-- Enter a rendered table to edit its original Org source; leave it to render
-  the widget again.
+- Move onto a row to edit its Org source in place: the row under point is never
+  rendered, and the other rows stay rendered. Leaving the row renders it again.

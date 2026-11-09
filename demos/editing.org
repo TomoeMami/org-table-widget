@@ -1,10 +1,10 @@
 #+title: Editing flow
 # 1. Enable org-table-widget-mode with point on this comment.
-# 2. Down stops on the widget. Press e: source reappears without an undo entry.
+# 2. Down stops on each row; the row under point is already source, no key needed.
 # 3. Edit a cell, TAB to the next cell, RET for the next row.
 # 4. C-c C-c to align; recalculate via C-c C-c on the TBLFM line.
 # 5. M-<right> moves the column. Check the formula references afterward.
-# 6. Leave for the paragraph: the widget should return with your edits.
+# 6. Leave for the paragraph: every row should render with your edits.
 # 7. Undo should undo only your edits, not rendering. Save keeps Org source.
 
 | Item | Count | Price | Total |

@@ -41,8 +41,13 @@
      ,@body))
 
 (defun org-table-widget-tests--lines (string)
-  "Split rendered STRING into lines without properties."
-  (split-string (substring-no-properties string) "\n"))
+  "Split rendered STRING into lines without properties.
+Pixel spaces are dropped, so the lines hold only the visible text."
+  (split-string (org-table-widget-tests--visible string) "\n"))
+
+(defun org-table-widget-tests--visible (string)
+  "Return STRING without properties and without pixel spaces."
+  (string-replace "\u200B" "" (substring-no-properties string)))
 
 ;;;; Parsing
 
@@ -121,12 +126,23 @@
                        :header-rows 1))
           (lines (org-table-widget-tests--lines
                   (org-table-widget--render table nil 80))))
-     ;; top, header, rule, row, rule, row, bottom
-     (should (equal (length lines) 7))
-     (should (string-prefix-p "┌" (nth 0 lines)))
-     (should (string-prefix-p "├" (nth 2 lines)))
-     (should (string-prefix-p "├" (nth 4 lines)))
-     (should (string-prefix-p "└" (nth 6 lines))))))
+     ;; A table is drawn in the shape Org gives it: no outer frame, one
+     ;; rule between the rows that the source separates.
+     (should (equal (length lines) 5))
+     (should (equal (nth 0 lines) "| A | B |"))
+     ;; Column widths are pixels, so a rule is as wide as its column.
+     (should (string-prefix-p "|---+" (nth 1 lines)))
+     (should (string-suffix-p "---|" (nth 1 lines)))
+     (should-not (string-match-p "[^|+-]" (nth 1 lines)))
+     (should (equal (nth 2 lines) "| 1 | 22 |"))
+     (should (string-prefix-p "|---+" (nth 3 lines)))
+     (should (string-suffix-p "---|" (nth 3 lines)))
+     (should-not (string-match-p "[^|+-]" (nth 3 lines)))
+     (should (equal (nth 4 lines) "| x | y |"))
+     (dolist (line lines)
+       (should (string-prefix-p "|" line))
+       (should (string-suffix-p "|" line))
+       (should-not (string-match-p "┌\|┬\|┐\|├\|┼\|┤\|└\|┴\|┘\|─\|│" line))))))
 
 (ert-deftest org-table-widget-render-header-face ()
   (org-table-widget-tests--with-pixel-mocks
@@ -148,7 +164,7 @@
           (lines (org-table-widget-tests--lines
                   (org-table-widget--render table nil 30))))
      ;; A 59-column cell in a 30-column window needs several lines.
-     (should (> (length lines) 3))
+     (should (>= (length lines) 3))
      (dolist (line lines)
        (should (<= (string-width line) 30))))))
 
@@ -244,7 +260,8 @@
           (plain (mapconcat #'identity lines "\n")))
      (should (string-match-p (regexp-quote "0.6296 %") plain))
      (should (string-match-p (regexp-quote "773.8 m") plain))
-     (should (> (length lines) 7)))))
+     ;; One line per row, plus the rules between them; wrapped rows add more.
+     (should (>= (length lines) 6)))))
 
 (ert-deftest org-table-widget-minimum-keeps-unbreakable-token ()
   (org-table-widget-tests--with-pixel-mocks
@@ -265,8 +282,9 @@
 
 ;;;; Overlays
 
-(ert-deftest org-table-widget-reveal-entry-direction ()
-  ;; Simulate the landing position produced by display-based vertical motion.
+(ert-deftest org-table-widget-rest-entry-direction ()
+  ;; Point lands on a row whatever direction it came from; the row keeps its
+  ;; source while the other rows of the table stay drawn.
   (dolist (case '((previous-line below last)
                   (next-line below last) ; Negative prefix argument.
                   (next-line above first)
@@ -274,52 +292,55 @@
     (org-table-widget-tests--with-org "Before\n| a |\n| b |\n| c |\nAfter\n"
       (save-window-excursion
         (switch-to-buffer (current-buffer))
-        (org-table-widget-mode 1)
-        (unwind-protect
-            (let* ((org-table-widget-reveal-on-point t)
-                   (table (car (org-table-widget--tables)))
-                   (overlay (org-table-widget--display-table
-                             (car table) (cdr table) (selected-window) 80))
-                   (this-command (car case))
-                   (real-this-command this-command))
-              (goto-char (if (eq (nth 1 case) 'below) (cdr table) (point-min)))
-              (run-hooks 'pre-command-hook)
-              (goto-char (car table))
-              (run-hooks 'post-command-hook)
-              (should (= (line-number-at-pos)
-                         (if (eq (nth 2 case) 'last) 4 2)))
-              (should-not (overlay-buffer overlay))
-              (should org-table-widget--inside-table))
-          (org-table-widget-mode -1))))))
+        (org-table-widget-tests--with-pixel-mocks
+         (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+           (org-table-widget-mode 1)
+           (unwind-protect
+               (let* ((table (car (org-table-widget--tables)))
+                      (this-command (car case))
+                      (real-this-command this-command))
+                 (goto-char (if (eq (nth 1 case) 'below) (cdr table) (point-min)))
+                 (run-hooks 'pre-command-hook)
+                 (goto-char (car table))
+                 (run-hooks 'post-command-hook)
+                 (should (= (line-number-at-pos)
+                            (if (eq (nth 2 case) 'last) 4 2)))
+                 ;; The row point rests on is source, the others stay drawn.
+                 (should-not (org-table-widget--overlay-at (point)))
+                 (should (= (length org-table-widget--overlays) 2)))
+             (org-table-widget-mode -1))))))))
 
-(ert-deftest org-table-widget-reveal-skipped-table ()
-  ;; A display-based Down can cross the entire overlay in one step.
-  (dolist (command '(next-line previous-line isearch-forward))
+(ert-deftest org-table-widget-rest-skipped-table ()
+  ;; A display-based Down can cross several rows in one step; point backs up
+  ;; to the row next to the one it left.
+  (dolist (case '((next-line below first) (previous-line above last)))
     (org-table-widget-tests--with-org "Before\n| a |\n| b |\nAfter\n"
       (save-window-excursion
         (switch-to-buffer (current-buffer))
         (org-table-widget-mode 1)
         (unwind-protect
-            (let* ((org-table-widget-reveal-on-point t)
-                   (table (car (org-table-widget--tables)))
-                   (overlay (org-table-widget--display-table
-                             (car table) (cdr table) (selected-window) 80))
-                   (this-command command)
-                   (real-this-command command))
+            (let* ((table (car (org-table-widget--tables)))
+                   (this-command (car case))
+                   (real-this-command this-command)
+                   (current-prefix-arg nil))
+              (unless (org-table-widget--overlay-at (car table))
+                (org-table-widget--display-table
+                 (car table) (cdr table) (selected-window) 80))
+              (goto-char (if (eq (nth 1 case) 'below) (point-min) (cdr table)))
               (run-hooks 'pre-command-hook)
-              (goto-char (cdr table))
+              (goto-char (if (eq (nth 1 case) 'below) (cdr table) (point-min)))
               (run-hooks 'post-command-hook)
-              (if (eq command 'isearch-forward)
-                  (progn
-                    (should (= (point) (cdr table)))
-                    (should (overlay-buffer overlay)))
-                (should (= (point) (car table)))
-                (should-not (overlay-buffer overlay))
-                (should org-table-widget--inside-table)))
+              (ert-info ((format "%S" case))
+                (should (= (point) (if (eq (nth 2 case) 'first)
+                                       (car table)
+                                     (save-excursion
+                                       (goto-char (car table))
+                                       (line-beginning-position 2)))))
+                (should-not (org-table-widget--overlay-at (point)))))
           (org-table-widget-mode -1))))))
 
-(ert-deftest org-table-widget-reveal-vertical-interactive ()
-  ;; Redisplay is required: batch line motion ignores the preview's geometry.
+(ert-deftest org-table-widget-rest-vertical-interactive ()
+  ;; Redisplay is required: batch line motion ignores the row geometry.
   (skip-unless (not noninteractive))
   (dolist (visual '(nil t))
     (dolist (command '(next-line previous-line))
@@ -330,11 +351,7 @@
           (goto-char (point-max))
           (org-table-widget-mode 1)
           (unwind-protect
-              (let ((org-table-widget-reveal-on-point t)
-                    (table (car (org-table-widget--tables))))
-                (unless org-table-widget--overlays
-                  (org-table-widget--display-table
-                   (car table) (cdr table) (selected-window) 80))
+              (let ((table (car (org-table-widget--tables))))
                 (goto-char (if (eq command 'next-line) (point-min) (cdr table)))
                 (redisplay t)
                 (let ((this-command command)
@@ -344,137 +361,46 @@
                   (run-hooks 'post-command-hook))
                 (should (= (line-number-at-pos)
                            (if (eq command 'next-line) 2 4)))
-                (should-not org-table-widget--overlays))
+                (should-not (org-table-widget--overlay-at (point))))
             (org-table-widget-mode -1)))))))
 
-(ert-deftest org-table-widget-rest-steps-over-widget ()
+(ert-deftest org-table-widget-rest-steps-over-rows ()
   ;; (COMMAND FROM LANDING EXPECTED): where a command left point, and where
   ;; point settles.  Display-based vertical motion can skip rows.
   (dolist (case '((next-line before end start)
                   (next-line before second start)
                   (next-line start end second)
-                  (next-line second end end)
                   (previous-line end start second)
                   (previous-line second start start)
                   (previous-line end second second)
-                  (forward-char start inside second)
-                  (forward-char second second-inside end)
-                  (backward-char second inside start)
-                  (backward-char end second-inside second)
                   (next-line before inside start)   ; Logical line motion.
-                  (goto-char end inside start)))
+                  ;; Point may rest anywhere inside a row: that row is source.
+                  (goto-char end inside inside)))
     (org-table-widget-tests--with-org "Before\n| a |\n| b |\nAfter\n"
       (save-window-excursion
         (switch-to-buffer (current-buffer))
-        (org-table-widget-mode 1)
-        (unwind-protect
-            (let* ((org-table-widget-reveal-on-point nil)
-                   (table (car (org-table-widget--tables)))
-                   (overlay (org-table-widget--display-table
-                             (car table) (cdr table) (selected-window) 80))
-                   (second (+ (car table) 6))
-                   (places `((before . ,(point-min)) (start . ,(car table))
-                             (inside . ,(+ (car table) 3)) (second . ,second)
-                             (second-inside . ,(+ second 3))
-                             (end . ,(cdr table))))
-                   (this-command (nth 0 case))
-                   (real-this-command this-command))
-              (goto-char (alist-get (nth 1 case) places))
-              (run-hooks 'pre-command-hook)
-              (goto-char (alist-get (nth 2 case) places))
-              (run-hooks 'post-command-hook)
-              (ert-info ((format "%S" case))
-                (should (= (point) (alist-get (nth 3 case) places)))
-                (should (overlay-buffer overlay))
-                (should (org-table-widget--overlay-at second))
-                (should-not org-table-widget--inside-table)))
-          (org-table-widget-mode -1))))))
-
-(ert-deftest org-table-widget-jump-passes-widget ()
-  ;; Evil sets `this-command' to `next-line' in gg and G (#5).
-  (dolist (case '((evil-goto-line before after)
-                  (evil-goto-first-line after before)))
-    (dolist (count '(nil 1))
-      (org-table-widget-tests--with-org "Before\n| a |\n| b |\nAfter\n"
-        (save-window-excursion
-          (switch-to-buffer (current-buffer))
-          (org-table-widget-mode 1)
-          (unwind-protect
-              (let* ((org-table-widget-reveal-on-point nil)
-                     (table (car (org-table-widget--tables)))
-                     (overlay (org-table-widget--display-table
-                               (car table) (cdr table) (selected-window) 80))
-                     (places `((before . ,(point-min)) (after . ,(point-max))))
-                     (this-command 'next-line)
-                     (real-this-command (nth 0 case))
-                     (current-prefix-arg count))
-                (goto-char (alist-get (nth 1 case) places))
-                (run-hooks 'pre-command-hook)
-                (goto-char (alist-get (nth 2 case) places))
-                (run-hooks 'post-command-hook)
-                (ert-info ((format "%S, count %S" case count))
-                  (should (= (point) (alist-get (nth 2 case) places)))
-                  (should (overlay-buffer overlay))))
-            (org-table-widget-mode -1)))))))
-
-(ert-deftest org-table-widget-line-motion-skips-folded-tables ()
-  (dolist (style '(overlays text-properties))
-    (dolist (reveal '(nil t))
-      (dolist (command '(next-line previous-line))
-        (let ((org-fold-core-style style)
-              (org-table-widget-reveal-on-point reveal)
-              (line-move-visual nil))
-          (org-table-widget-tests--with-org "* Folded\n| a |\n| b |\n* Next\n"
-            (save-window-excursion
-              (switch-to-buffer (current-buffer))
-              (org-table-widget-tests--with-pixel-mocks
-                (cl-letf (((symbol-function 'display-graphic-p)
-                           (lambda (&rest _) t)))
-                  (org-table-widget-mode 1)
-                  (unwind-protect
-                      (let* ((table (car (org-table-widget--tables)))
-                             (overlays (copy-sequence org-table-widget--overlays))
-                             (next (cdr table))
-                             (this-command command)
-                             (real-this-command command)
-                             (current-prefix-arg nil))
-                        (org-fold-hide-subtree)
-                        (should (invisible-p (car table)))
-                        (goto-char (if (eq command 'next-line) (point-min) next))
-                        (run-hooks 'pre-command-hook)
-                        (call-interactively command)
-                        ;; Native line motion already skips the folded subtree.
-                        (should (= (point) (if (eq command 'next-line)
-                                               next (point-min))))
-                        (run-hooks 'post-command-hook)
-                        (ert-info ((format "%S, reveal %S, %S" style reveal command))
-                          (should (= (point) (if (eq command 'next-line)
-                                                 next (point-min))))
-                          (should-not (invisible-p (point)))
-                          (should (equal overlays org-table-widget--overlays))
-                          (should-not org-table-widget--inside-table)))
-                    (org-table-widget-mode -1)))))))))))
-
-(ert-deftest org-table-widget-rest-reveals-search-match ()
-  (org-table-widget-tests--with-org "Before\n| key |\n| value |\nAfter\n"
-    (save-window-excursion
-      (switch-to-buffer (current-buffer))
-      (org-table-widget-mode 1)
-      (unwind-protect
-          (let* ((org-table-widget-reveal-on-point nil)
-                 (table (car (org-table-widget--tables)))
-                 (overlay (org-table-widget--display-table
-                           (car table) (cdr table) (selected-window) 80))
-                 (this-command 'isearch-printing-char))
-            (run-hooks 'pre-command-hook)
-            (search-forward "value")
-            ;; Isearch keeps point on its match by disabling adjustment.
-            (let ((disable-point-adjustment t))
-              (run-hooks 'post-command-hook))
-            (should (looking-back "value" 5))
-            (should-not (overlay-buffer overlay))
-            (should org-table-widget--inside-table))
-        (org-table-widget-mode -1)))))
+        (org-table-widget-tests--with-pixel-mocks
+         (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+           (org-table-widget-mode 1)
+           (unwind-protect
+               (let* ((table (car (org-table-widget--tables)))
+                      (second (+ (car table) 6))
+                      (places `((before . ,(point-min)) (start . ,(car table))
+                                (inside . ,(+ (car table) 3)) (second . ,second)
+                                (end . ,(cdr table))))
+                      (this-command (nth 0 case))
+                      (real-this-command this-command))
+                 (goto-char (alist-get (nth 1 case) places))
+                 (run-hooks 'pre-command-hook)
+                 (goto-char (alist-get (nth 2 case) places))
+                 (run-hooks 'post-command-hook)
+                 (ert-info ((format "%S" case))
+                   (should (= (point) (alist-get (nth 3 case) places)))
+                   ;; The row point rests on is source, not a drawn row.
+                   (should-not (and (org-table-widget--overlay-at (point))
+                                    (overlay-get (org-table-widget--overlay-at (point))
+                                                 'org-table-widget-row)))))
+             (org-table-widget-mode -1))))))))
 
 (ert-deftest org-table-widget-terminal-rendering-follows-option ()
   (require 'textui)
@@ -489,108 +415,76 @@
               (org-table-widget-refresh)
               (should (eq enabled (and org-table-widget--overlays t))))))))))
 
-(ert-deftest org-table-widget-edit-reveals-until-point-leaves ()
+(ert-deftest org-table-widget-edit-row-in-place ()
   (org-table-widget-tests--with-org "Before\n| a | b |\n| c | d |\nAfter\n"
     (save-window-excursion
       (switch-to-buffer (current-buffer))
       (org-table-widget-tests--with-pixel-mocks
-        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
-          (let ((org-table-widget-reveal-on-point nil)
-                (org-table-widget-relayout-delay 3600)
-                (start (caar (org-table-widget--tables))))
-            (unwind-protect
-                (progn
-                  (org-table-widget-mode 1)
-                  (goto-char start)
-                  (org-table-widget--post-command)
-                  (should (org-table-widget--overlay-at start))
-                  (should (eq (key-binding "e") #'org-table-widget-edit))
-                  (call-interactively (key-binding "e"))
-                  (should-not org-table-widget--overlays)
-                  (should org-table-widget--inside-table)
-                  (should (= (point) start))
-                  (should-not (eq (key-binding "e") #'org-table-widget-edit))
-                  ;; A relayout while the source is being edited keeps it.
-                  (org-table-widget-refresh)
-                  (should-not org-table-widget--overlays)
-                  (forward-line 1)
-                  (org-table-widget--post-command)
-                  (should-not org-table-widget--overlays)
-                  (goto-char (point-max))
-                  (org-table-widget--post-command)
-                  (should (org-table-widget--overlay-at start))
-                  (should-not org-table-widget--inside-table)
-                  ;; Toggling the revealed source back rests on the widget.
-                  (goto-char start)
-                  (org-table-widget-toggle)
-                  (should-not org-table-widget--overlays)
-                  (forward-line 1)
-                  (forward-char 3)
-                  (org-table-widget-toggle)
-                  (should (= (point) (line-beginning-position)))
-                  (should (= (line-number-at-pos) 3))
-                  (should (org-table-widget--overlay-at start))
-                  ;; Editing from the second row starts on its line.
-                  (org-table-widget-edit)
-                  (should-not org-table-widget--overlays)
-                  (should (= (line-number-at-pos) 3))
-                  (goto-char (point-max))
-                  (org-table-widget--post-command)
-                  ;; A relayout keeps a widget whose row point rests on.
-                  (goto-char start)
-                  (forward-line 1)
-                  (org-table-widget--post-command)
-                  (should (org-table-widget--overlay-at (point)))
-                  (org-table-widget-refresh)
-                  (should (org-table-widget--overlay-at (point)))
-                  (should (org-table-widget--overlay-at start))
-                  (should-error (progn (goto-char (point-min))
-                                       (org-table-widget-edit))
-                                :type 'user-error)
-                  ;; Enabling with point in the source leaves that table as source.
-                  (org-table-widget-mode -1)
-                  (goto-char (1+ start))
-                  (org-table-widget-mode 1)
-                  (should-not org-table-widget--overlays)
-                  (org-table-widget--post-command)
-                  (goto-char (point-max))
-                  (org-table-widget--post-command)
-                  (should (org-table-widget--overlay-at start)))
-              (org-table-widget-mode -1))))))))
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (let ((org-table-widget-relayout-delay 3600)
+               (start (caar (org-table-widget--tables))))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 (goto-char start)
+                 (org-table-widget--post-command)
+                 (should-not (org-table-widget--overlay-at start))
+                 (should (org-table-widget--overlay-at
+                          (save-excursion
+                            (goto-char start)
+                            (line-beginning-position 2))))
+                 (goto-char start)
+                 (forward-char 2)
+                 (insert "X")
+                 (should (string-match-p "| Xa | b |" (buffer-string)))
+                 (org-table-widget--post-command)
+                 ;; The edit drops the rows; the next command draws them
+                 ;; again, leaving the row point rests on as source.
+                 (should-not (org-table-widget--overlay-at start))
+                 (forward-line 1)
+                 (org-table-widget--post-command)
+                 (should (org-table-widget--overlay-at start))
+                 (should-not (org-table-widget--overlay-at (point)))
+                 (goto-char (point-max))
+                 (org-table-widget--post-command)
+                 (should (= (length org-table-widget--overlays) 2))
+                 (should (org-table-widget--overlay-at start)))
+             (org-table-widget-mode -1))))))))
 
-(ert-deftest org-table-widget-rest-vertical-interactive ()
-  ;; Redisplay is required: batch line motion ignores the widget's geometry.
-  (skip-unless (not noninteractive))
-  (dolist (visual '(nil t))
-    (org-table-widget-tests--with-org "Before\n| a |\n| b |\n| c |\nAfter\n"
-      (save-window-excursion
-        (switch-to-buffer (current-buffer))
-        (when visual (visual-line-mode 1))
-        (let ((org-table-widget-reveal-on-point nil))
-          (org-table-widget-mode 1)
-          (unwind-protect
-              (let* ((table (car (org-table-widget--tables)))
-                     (overlay (or (org-table-widget--overlay-at (car table))
-                                  (org-table-widget--display-table
-                                   (car table) (cdr table) (selected-window) 80)))
-                     stops)
-                (goto-char (point-min))
-                (dolist (command '(next-line next-line previous-line previous-line))
-                  (redisplay t)
-                  (let ((this-command command)
-                        (real-this-command command))
-                    (run-hooks 'pre-command-hook)
-                    (call-interactively command)
-                    (run-hooks 'post-command-hook))
-                  (push (point) stops))
-                (should (equal (nreverse stops)
-                               (list (car table)
-                                     (save-excursion
-                                       (goto-char (car table))
-                                       (line-beginning-position 2))
-                                     (car table) (point-min))))
-                (should (overlay-buffer overlay)))
-            (org-table-widget-mode -1)))))))
+(ert-deftest org-table-widget-toggle-reveals-and-draws-a-table ()
+  (org-table-widget-tests--with-org "Before\n| a | b |\n| c | d |\nAfter\n"
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-table-widget-tests--with-pixel-mocks
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (let ((org-table-widget-relayout-delay 3600)
+               (start (caar (org-table-widget--tables))))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 (goto-char start)
+                 (org-table-widget--post-command)
+                 (org-table-widget-toggle)
+                 (should (org-table-widget--revealed-p start))
+                 (should-not (org-table-widget--table-overlays start))
+                 (org-table-widget-refresh)
+                 (should-not (org-table-widget--table-overlays start))
+                 (org-table-widget-toggle)
+                 (should-not (org-table-widget--revealed-p start))
+                 (should (= (length (org-table-widget--table-overlays start)) 1))
+                 (org-table-widget-toggle)
+                 (should (org-table-widget--revealed-p start))
+                 (goto-char (point-max))
+                 (org-table-widget--post-command)
+                 (should-not (org-table-widget--revealed-p start))
+                 (should (= (length (org-table-widget--table-overlays start)) 2)))
+             (org-table-widget-mode -1))))))))
+
+(ert-deftest org-table-widget-toggle-outside-a-table-signals ()
+  (org-table-widget-tests--with-org "Before\n| a | b |\nAfter\n"
+    (should-error (progn (goto-char (point-min))
+                         (org-table-widget-toggle))
+                  :type 'user-error)))
 
 (ert-deftest org-table-widget-tables-skips-table-el ()
   (org-table-widget-tests--with-org "text\n| a |\n| b |\n\n+---+\n| c |\n+---+\n\n| d |\n"
@@ -619,124 +513,126 @@
   (dolist (source '("| a | longer |\n| b | x |\n"
                     "| a | longer |\n| b | x |"))
     (org-table-widget-tests--with-org source
-                                      (org-table-widget-tests--with-pixel-mocks
-                                       (font-lock-ensure)
-                                       (set-buffer-modified-p nil)
-                                       (let* ((before (buffer-string))
-                                              (undo buffer-undo-list)
-                                              (overlay (org-table-widget--display-table
-                                                        (point-min) (point-max) (selected-window) 80))
-                                              (rendered (overlay-get overlay 'before-string)))
-                                         ;; Point can rest only before a non-empty replacement.
-                                         (should (equal (overlay-get overlay 'display) "\n"))
-                                         (should (stringp rendered))
-                                         (let ((all (mapconcat (lambda (segment)
-                                                                 (overlay-get segment 'before-string))
-                                                               (org-table-widget--segments overlay)
-                                                               "\n")))
-                                           (should (text-property-any 0 (length all)
-                                                                      'org-table-widget-spacing t all)))
-                                         (should-not (string-suffix-p "\n" rendered))
-                                         (should (get-text-property 0 'cursor rendered))
-                                         (should (eq (overlay-get overlay 'keymap)
-                                                     org-table-widget-map))
-                                         ;; One overlay per row: the first holds the top border.
-                                         (should (= (length org-table-widget--overlays) 2))
-                                         (should (equal (org-table-widget--segments overlay)
-                                                        org-table-widget--overlays))
-                                         (should (= (length (org-table-widget-tests--lines rendered)) 2))
-                                         (should (eq overlay (org-table-widget--overlay-at (point-min))))
-                                         (let ((last (org-table-widget--overlay-at (1- (point-max)))))
-                                           (should-not (eq overlay last))
-                                           (should (= (overlay-start last) (overlay-end overlay)))
-                                           (should (= (overlay-end last) (point-max)))
-                                           (should (equal (overlay-get last 'display)
-                                                          (if (string-suffix-p "\n" source) "\n" " ")))
-                                           (should (get-text-property 0 'cursor
-                                                                      (overlay-get last 'before-string)))
-                                           (should (= (length (org-table-widget-tests--lines
-                                                               (overlay-get last 'before-string)))
-                                                      2)))
-                                         (should-not (org-table-widget--overlay-at (point-max)))
-                                         (org-table-widget--remove-overlay overlay)
-                                         (should-not (overlay-buffer overlay))
-                                         (should-not org-table-widget--overlays)
-                                         (should (equal-including-properties before (buffer-string)))
-                                         (should (eq undo buffer-undo-list))
-                                         (should-not (buffer-modified-p)))))))
+      (org-table-widget-tests--with-pixel-mocks
+       (font-lock-ensure)
+       (set-buffer-modified-p nil)
+       (let* ((before (buffer-string))
+              (undo buffer-undo-list)
+              (overlay (org-table-widget--display-table
+                        (point-min) (point-max) (selected-window) 80))
+              (rendered (overlay-get overlay 'before-string)))
+         (should (stringp rendered))
+         ;; Pixel padding survives in the overlay strings.
+         (let ((all (mapconcat (lambda (segment)
+                                 (overlay-get segment 'before-string))
+                               (org-table-widget--segments overlay)
+                               "\n")))
+           (should (text-property-any 0 (length all)
+                                      'org-table-widget-spacing t all)))
+         (should-not (string-suffix-p "\n" rendered))
+         ;; One overlay for each row of the table.
+         (should (= (length org-table-widget--overlays) 2))
+         (should (equal (org-table-widget--segments overlay)
+                        (sort (copy-sequence org-table-widget--overlays)
+                              (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+         (should (eq overlay (org-table-widget--overlay-at (point-min))))
+         (let ((last (org-table-widget--overlay-at (1- (point-max)))))
+           (should-not (eq overlay last))
+           (should (= (overlay-start last) (overlay-end overlay)))
+           (should (= (overlay-end last) (point-max)))
+           (should (equal (overlay-get last 'display)
+                          (if (string-suffix-p "\n" source) "\n" " "))))
+         (should-not (org-table-widget--overlay-at (point-max)))
+         (org-table-widget--remove-overlay overlay)
+         (should-not (overlay-buffer overlay))
+         (should-not org-table-widget--overlays)
+         (should (equal-including-properties before (buffer-string)))
+         (should (eq undo buffer-undo-list))
+         (should-not (buffer-modified-p)))))))
 
 (ert-deftest org-table-widget-overlay-lifecycle ()
   (org-table-widget-tests--with-org "Before\n| a | longer |\n\nAfter\n| b | c |\n"
-                                    (save-window-excursion
-                                      (switch-to-buffer (current-buffer))
-                                      (org-table-widget-tests--with-pixel-mocks
-                                       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
-                                         (font-lock-ensure)
-                                         (buffer-enable-undo)
-                                         (set-buffer-modified-p nil)
-                                         (let ((before (buffer-string))
-                                               (undo buffer-undo-list)
-                                               (org-table-widget-reveal-on-point t)
-                                               (org-table-widget-relayout-delay 0))
-                                           (unwind-protect
-                                               (progn
-                                                 (org-table-widget-mode 1)
-                                                 (should (= (length org-table-widget--overlays) 2))
-                                                 (let ((old (copy-sequence org-table-widget--overlays)))
-                                                   (org-table-widget-refresh)
-                                                   (should (seq-every-p
-                                                            (lambda (overlay) (not (overlay-buffer overlay)))
-                                                            old)))
-                                                 (goto-char (caar (org-table-widget--tables)))
-                                                 (org-table-widget--post-command)
-                                                 (should-not (org-table-widget--overlay-at (point)))
-                                                 (should (= (length org-table-widget--overlays) 1))
-                                                 (goto-char (point-min))
-                                                 (org-table-widget--post-command)
-                                                 (should (= (length org-table-widget--overlays) 2))
-                                                 (goto-char (caar (org-table-widget--tables)))
-                                                 (org-table-widget-toggle)
-                                                 (should-not (org-table-widget--overlay-at (point)))
-                                                 (org-table-widget-toggle)
-                                                 (should (= (length org-table-widget--overlays) 2))
-                                                 ;; Force the same callback that a changed window width uses.
-                                                 (let ((old (copy-sequence org-table-widget--overlays)))
-                                                   (setq org-table-widget--width 1)
-                                                   (org-table-widget--window-changed)
-                                                   (should (= (length org-table-widget--overlays) 2))
-                                                   (should (seq-every-p
-                                                            (lambda (overlay) (not (overlay-buffer overlay)))
-                                                            old)))
-                                                 (let ((old (copy-sequence org-table-widget--overlays)))
-                                                   (org-table-widget-mode -1)
-                                                   (should-not org-table-widget--overlays)
-                                                   (should (seq-every-p
-                                                            (lambda (overlay) (not (overlay-buffer overlay)))
-                                                            old)))
-                                                 (should (equal-including-properties before (buffer-string)))
-                                                 (should (eq undo buffer-undo-list))
-                                                 (should-not (buffer-modified-p)))
-                                             (org-table-widget-mode -1))))))))
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-table-widget-tests--with-pixel-mocks
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (font-lock-ensure)
+         (buffer-enable-undo)
+         (set-buffer-modified-p nil)
+         (let ((before (buffer-string))
+               (undo buffer-undo-list)
+               (org-table-widget-relayout-delay 0))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 ;; Both tables are drawn, one overlay per row.
+                 (should (= (length org-table-widget--overlays) 2))
+                 (let ((old (copy-sequence org-table-widget--overlays)))
+                   (org-table-widget-refresh)
+                   (should (seq-every-p
+                            (lambda (overlay) (not (overlay-buffer overlay)))
+                            old)))
+                 ;; Point on a row leaves that row as source.
+                 (goto-char (caar (org-table-widget--tables)))
+                 (org-table-widget--post-command)
+                 (should-not (org-table-widget--overlay-at (point)))
+                 (should (= (length org-table-widget--overlays) 1))
+                 (goto-char (point-min))
+                 (org-table-widget--post-command)
+                 (should (= (length org-table-widget--overlays) 2))
+                 ;; Toggle reveals one table's source and draws it again.
+                 (goto-char (caar (org-table-widget--tables)))
+                 (let ((beg (caar (org-table-widget--tables))))
+                   (org-table-widget-toggle)
+                   (should (org-table-widget--revealed-p beg))
+                   (should-not (org-table-widget--table-overlays beg))
+                   (org-table-widget-toggle)
+                   (should-not (org-table-widget--revealed-p beg))
+                   ;; The table has one row and point rests on it, so the
+                   ;; table is source again: drawing it leaves no overlay.
+                   (should-not (org-table-widget--table-overlays beg)))
+                 ;; Force the same callback that a changed window width uses.
+                 (let ((old (copy-sequence org-table-widget--overlays)))
+                   (setq org-table-widget--width 1)
+                   (org-table-widget--window-changed)
+                   (should (= (length org-table-widget--overlays) 1))
+                   (should (seq-every-p
+                            (lambda (overlay) (not (overlay-buffer overlay)))
+                            old)))
+                 (let ((old (copy-sequence org-table-widget--overlays)))
+                   (org-table-widget-mode -1)
+                   (should-not org-table-widget--overlays)
+                   (should (seq-every-p
+                            (lambda (overlay) (not (overlay-buffer overlay)))
+                            old)))
+                 (should (equal-including-properties before (buffer-string)))
+                 (should (eq undo buffer-undo-list))
+                 (should-not (buffer-modified-p)))
+             (org-table-widget-mode -1))))))))
 
-(ert-deftest org-table-widget-overlay-reveals-on-modification ()
+(ert-deftest org-table-widget-edit-keeps-the-other-rows-drawn ()
   (require 'textui)
-  ;; Editing any row, including at the start of a later row, removes them all.
+  ;; Editing a row keeps the rest of the table rendered: the overlays stay
+  ;; where they are and follow the text as it changes.
   (dolist (offset '(0 3 15 17))
     (org-table-widget-tests--with-org "| a | longer |\n| b | x |\n"
-                                      (org-table-widget-tests--with-pixel-mocks
-                                       (let* ((overlay (org-table-widget--display-table
-                                                        (point-min) (point-max) (selected-window) 80))
-                                              (segments (org-table-widget--segments overlay)))
-                                         (should (= (length segments) 2))
-                                         (goto-char (+ (point-min) offset))
-                                         (insert "x")
-                                         (should-not (seq-some #'overlay-buffer segments))
-                                         (should-not org-table-widget--overlays))))))
+      (org-table-widget-tests--with-pixel-mocks
+       (let* ((overlay (org-table-widget--display-table
+                        (point-min) (point-max) (selected-window) 80))
+              (segments (org-table-widget--segments overlay)))
+         (should (= (length segments) 2))
+         (goto-char (+ (point-min) offset))
+         (insert "x")
+         ;; The rows are still drawn, and the edit is planned for a relayout.
+         (should (seq-every-p #'overlay-buffer segments))
+         (should org-table-widget--dirty)
+         (should-not org-table-widget--render-cache)
+         (should (org-table-widget--table-overlays (point-min))))))))
 
 (ert-deftest org-table-widget-rows-cover-their-source-lines ()
   (require 'textui)
-  ;; Lines the widget does not draw join the row above them; the borders
-  ;; go with the first and last rows.
+  ;; Source lines a row does not draw itself, such as alignment cookies,
+  ;; join the row above them, so no source line stays uncovered.
   (org-table-widget-tests--with-org
       (concat "|---+---|\n| A | B |\n| <l> | <r> |\n|---+---|\n| 1 | 2 |\n"
               "|---+---|\n|---+---|\n| 3 | 4 |\n|---+---|\nAfter\n")
@@ -749,19 +645,19 @@
        (should (equal (mapcar (lambda (segment)
                                 (list (line-number-at-pos (overlay-start segment))
                                       (line-number-at-pos (overlay-end segment))
-                                      (org-table-widget-tests--lines
-                                       (overlay-get segment 'before-string))))
+                                      (length (org-table-widget-tests--lines
+                                               (overlay-get segment 'before-string)))))
                               segments)
-                      '((1 4 ("┌───┬───┐" "│ A │ B │"))
-                        (4 5 ("├───┼───┤"))
-                        (5 6 ("│ 1 │ 2 │"))
-                        (6 8 ("├───┼───┤"))
-                        (8 10 ("│ 3 │ 4 │" "└───┴───┘")))))
+                      '((1 4 1)
+                        (4 5 1)
+                        (5 6 1)
+                        (6 8 1)
+                        (8 10 1))))
        (should (= (overlay-end (car (last segments))) (cdr table)))
        (dolist (segment segments)
-         (should (get-text-property 0 'cursor (overlay-get segment 'before-string)))
-         (should (eq (overlay-get segment 'org-table-widget)
-                     (overlay-get overlay 'org-table-widget))))
+         (should (eq (overlay-get segment 'org-table-widget-table) (car table)))
+         (should (org-table-widget-tests--lines
+                  (overlay-get segment 'before-string))))
        (org-table-widget--remove-overlay (nth 2 segments))
        (should-not (seq-some #'overlay-buffer segments))
        (should-not org-table-widget--overlays)))))
@@ -859,67 +755,89 @@
             (width 80)
             (font 1)
             (layout (symbol-function 'textui-layout-widget))
-            (org-table-widget-reveal-on-point t)
             (org-table-widget-relayout-delay 3600))
         (org-table-widget-tests--with-pixel-mocks
-          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
-                    ((symbol-function 'org-table-widget--layout-width)
-                     (lambda (_window) width))
-                    ((symbol-function 'org-table-widget--font-signature)
-                     (lambda (_window) (list font)))
-                    ((symbol-function 'textui-layout-widget)
-                     (lambda (widget columns)
-                       (cl-incf calls)
-                       (funcall layout widget columns))))
-            (unwind-protect
-                (progn
-                  (org-table-widget-mode 1)
-                  (should (= calls 1))
-                  (let ((rendered (overlay-get (car org-table-widget--overlays)
-                                               'before-string)))
-                    (org-table-widget-refresh)
-                    (should (= calls 1))
-                    (should (eq rendered (overlay-get
-                                          (car org-table-widget--overlays)
-                                          'before-string))))
-                  (goto-char (caar (org-table-widget--tables)))
-                  (org-table-widget--post-command)
-                  (should-not org-table-widget--overlays)
-                  (goto-char (point-min))
-                  (org-table-widget--post-command)
-                  (should (= calls 1))
-                  (setq font 2)
-                  (org-table-widget-refresh)
-                  (should (= calls 2))
-                  (setq width 60)
-                  (org-table-widget-refresh)
-                  (should (= calls 3))
-                  (let ((org-table-widget-use-unicode-borders nil))
-                    (org-table-widget-refresh)
-                    (should (= calls 4)))
-                  (goto-char (caar (org-table-widget--tables)))
-                  (org-table-widget--post-command)
-                  (search-forward "a")
-                  (insert " edited")
-                  (should-not org-table-widget--render-cache)
-                  (goto-char (point-min))
-                  (org-table-widget--post-command)
-                  (should (= calls 5))
-                  (should (string-match-p "edited"
-                                          (mapconcat (lambda (overlay)
-                                                       (overlay-get overlay 'before-string))
-                                                     org-table-widget--overlays)))
-                  (insert "New paragraph\n")
-                  (should-not org-table-widget--render-cache)
-                  (goto-char (point-min))
-                  (org-table-widget-refresh)
-                  (should (= calls 6))
-                  ;; One overlay for each of the table's two rows.
-                  (should (= (length org-table-widget--overlays) 2)))
-              (org-table-widget-mode -1)
-              (should-not org-table-widget--render-cache)
-              (should-not (memq #'org-table-widget--invalidate-render-cache
-                                after-change-functions)))))))))
+         (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                   ((symbol-function 'org-table-widget--layout-width)
+                    (lambda (_window) width))
+                   ((symbol-function 'org-table-widget--font-signature)
+                    (lambda (_window) (list font)))
+                   ((symbol-function 'textui-layout-widget)
+                    (lambda (widget columns)
+                      (cl-incf calls)
+                      (funcall layout widget columns))))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 (should (= calls 1))
+                 (let ((rendered (overlay-get (car org-table-widget--overlays)
+                                              'before-string)))
+                   (org-table-widget-refresh)
+                   (should (= calls 1))
+                   (should (eq rendered (overlay-get
+                                         (car org-table-widget--overlays)
+                                         'before-string))))
+                 ;; Moving onto a row only removes that row's overlay.
+                 (goto-char (caar (org-table-widget--tables)))
+                 (org-table-widget--post-command)
+                 (should (= (length org-table-widget--overlays) 1))
+                 (goto-char (point-min))
+                 (org-table-widget--post-command)
+                 (should (= calls 1))
+                 (should (= (length org-table-widget--overlays) 2))
+                 ;; Fonts and widths invalidate the layout.
+                 (setq font 2)
+                 (org-table-widget-refresh)
+                 (should (= calls 2))
+                 (setq width 60)
+                 (org-table-widget-refresh)
+                 (should (= calls 3))
+                 ;; Editing drops the cache and the rows; the next command
+                 ;; lays the table out again.
+                 (goto-char (caar (org-table-widget--tables)))
+                 (org-table-widget--post-command)
+                 (search-forward "a")
+                 (insert " edited")
+                 (should-not org-table-widget--render-cache)
+                 ;; The rows stay drawn while the edit is made.
+                 (should (org-table-widget--table-overlays
+                          (caar (org-table-widget--tables))))
+                 ;; The next command that leaves the edited row lays the
+                 ;; table out again.
+                 (goto-char (point-min))
+                 (org-table-widget--post-command)
+                 (should (= calls 4))
+                 ;; "edited" is in the row point rests on, so it is source
+                 ;; rather than a drawn row; the rendering holds it either
+                 ;; way, and neighbouring rows are drawn from it.
+                 (should (string-match-p
+                          "edited"
+                          (mapconcat (lambda (cached)
+                                       (mapconcat
+                                        (lambda (span)
+                                          (org-table-widget-tests--visible
+                                           (nth 1 span)))
+                                        (nth 2 cached) ""))
+                                     (let (entries)
+                                       (maphash (lambda (_key value)
+                                                  (push value entries))
+                                                org-table-widget--render-cache)
+                                       entries)
+                                     "")))
+                 (goto-char (point-min))
+                 (insert "New paragraph\n")
+                 ;; The edit is outside any table: the cache keeps the
+                 ;; tables it already laid out.
+                 (should org-table-widget--render-cache)
+                 (goto-char (point-min))
+                 (org-table-widget-refresh)
+                 (should (= calls 5))
+                 ;; One overlay for each of the table's two rows.
+                 (should (= (length org-table-widget--overlays) 2)))
+             (org-table-widget-mode -1)
+             (should-not org-table-widget--render-cache)
+             (should-not (memq #'org-table-widget--after-change
+                               after-change-functions)))))))))
 
 (ert-deftest org-table-widget-render-cache-checks-source-properties ()
   (require 'textui)
@@ -1234,9 +1152,9 @@
             (widget (overlay-get overlay 'org-table-widget))
             (header (widget-get widget :sticky-header))
             (a (string-match "A" header)))
-       ;; The header row without the top border, with `%' escaped for
-       ;; the header line.
-       (should (equal (substring-no-properties header) "│ A │ 50%% │"))
+       ;; The header row as Org draws it, with `%' escaped for the header
+       ;; line.
+       (should (string-match-p "| A |\\s-*50%%\\s-*|" (substring-no-properties header)))
        ;; The doubled `%' keeps the cell's faces, and so its width.
        (let ((percent (string-match "%%" header)))
          (should (equal (get-text-property percent 'face header)
@@ -1287,9 +1205,10 @@
                (should (eq header-line-format
                            org-table-widget--sticky-header-format))
                (should (string-suffix-p
-                        "│ A │ B │"
-                        (substring-no-properties
-                         (org-table-widget--sticky-header-line))))
+                        "| A | B |"
+                        (string-trim-right
+                         (substring-no-properties
+                          (org-table-widget--sticky-header-line)))))
                ;; A second update keeps the replaced header line.
                (org-table-widget--update-sticky-header)
                (should (equal org-table-widget--saved-header-line "Mine"))

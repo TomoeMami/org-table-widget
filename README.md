@@ -5,16 +5,21 @@ buffers, powered by [TextUI](https://github.com/yibie/textui).
 
 - Align mixed CJK, Latin text, emoji and inline code using pixel widths.
 - Wrap long cells and reflow after window resizing or text scaling.
-- Preserve Org cell faces and links; support `<l>`, `<c>` and `<r>` alignment,
-  horizontal separators, Unicode/ASCII borders and alternating row backgrounds.
+- Keep the Org source table's own look: `| cell | cell |` rows, `|---+---|`
+  rules, bold header rows and alternating row backgrounds.
+- Preserve Org cell faces and links; support `<l>`, `<c>` and `<r>` alignment
+  and horizontal separators.
 - Hide alignment and column-group declaration rows from the rendered table.
 
-Rendering uses overlays, leaving the source table intact for Org editing,
-export, formulas and Babel. Point stops on each row of a table as on a single
-character, with the cursor on the row's top-left corner; press `e` there to
-reveal the source, and move out to render it again.
+Rendering uses one overlay per source row, leaving the source table intact for
+Org editing, export, formulas and Babel. The row under point is not rendered: it
+shows the ordinary Org source, so point moves inside it and cells are edited
+right there, with no key to press first. The other rows stay rendered, and they
+keep their drawings while you type. Moving from row to row inside a table only
+destroys the overlay of the row point enters and rebuilds the overlay of the row
+point leaves, instead of revealing and laying out the whole table again.
 
-The cursor-entry correction for moving upward into a table preview is adapted
+The correction that keeps line motion from stepping over a drawn row is adapted
 from [karthink's org-latex-preview fix](https://github.com/karthink/org-mode/blob/olp/lisp/org-latex-preview.el#L670).
 Thanks to karthink for the fix and for explaining the multi-line preview edge case.
 
@@ -60,11 +65,28 @@ Use `M-x org-table-widget-mode` to enable or disable it in the current buffer,
 `M-x org-table-widget-toggle` to reveal or render the table at point, and
 `M-x org-table-widget-refresh` to refresh the buffer's tables.
 
-Line and character motion stop on each row of a rendered table, so long tables
-can be walked through and scrolled like ordinary text. With point on a row,
-press `e` (`org-table-widget-edit`) to edit the table's Org source, starting on
-that row's line; the table is rendered again once point leaves it. Searches that land inside a
-table reveal it too. Keys on a table come from `org-table-widget-map`.
+Line motion stops on every row of a table, so long tables can be walked
+through and scrolled like ordinary text. The row that point is on shows its Org
+source rather than the rendering, and point moves inside it character by
+character like any other line, so cells can be edited directly with no key to
+press first. All other rows of the table, and every other table in the buffer,
+remain rendered. Moving up or down inside a table renders the row you left and
+shows the source of the row you enter.
+
+Editing a cell keeps the rest of the table rendered: only the row under point
+is source, and the other rows keep their drawings while you type. An edit can
+change how wide a column is, and every row is drawn from the widths of all the
+table's cells, so the table is laid out again once point moves to another row;
+the row you move to is then the only one left as source. The relayout also runs
+on its own after `org-table-widget-relayout-delay` seconds of idle time.
+
+`M-x org-table-widget-toggle` reveals the whole table at point as source, so
+that a command can work on several rows at once, for example `org-table`
+alignment or `#+TBLFM` recalculation. Running it again on the table renders it,
+and moving point out of the table renders it as well; either way the row under
+point still shows its source. This is the only command that turns a whole table
+back into source: editing alone never does. A search that lands inside a table
+therefore leaves point on its Org source line.
 
 When a table's header, the rows above its first horizontal rule, scrolls out of
 view while the rest of the table is still on screen, the window's header line
@@ -80,13 +102,11 @@ Customize with `M-x customize-group RET org-table-widget RET`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `org-table-widget-use-unicode-borders` | `t` | Use Unicode borders; nil selects ASCII. |
 | `org-table-widget-enable-in-terminal` | `nil` | Render table widgets on text terminals as well. |
 | `org-table-widget-zebra-stripe` | `t` | Alternate data-row backgrounds. |
 | `org-table-widget-wrap-columns` | `t` | Wrap cell content; nil uses natural widths. |
 | `org-table-widget-max-width-fraction` | `1.0` | Fraction of the window body width available to the table. |
 | `org-table-widget-relayout-delay` | `0.15` | Idle seconds before resize relayout; zero or negative means immediate. |
-| `org-table-widget-reveal-on-point` | `nil` | Reveal source as soon as point enters a table, without `e`. |
 | `org-table-widget-sticky-header` | `t` | Keep a scrolled-off table header in the header line. |
 | `org-table-widget-cell-properties` | `(face font-lock-face invisible display mouse-face help-echo keymap follow-link htmlize-link org-emphasis)` | Text properties retained in rendered cells. |
 
@@ -99,10 +119,9 @@ Customize with `M-x customize-group RET org-table-widget RET`.
   reproduced; please include package versions and a minimal configuration when
   reporting it.
 - **`visual-line-mode`:** Cursor motion is tested with the mode both enabled
-  and disabled: Down and Up stop on the table, then step past it. With
-  `org-table-widget-reveal-on-point`, Down reveals the first source row and Up
-  the last. A narrow-window layout smoke test also passed with the mode enabled.
-  This does not eliminate the minimum-width overflow limitation noted below.
+  and disabled: Down and Up stop on the table rows, then step past the table.
+  A narrow-window layout smoke test also passed with the mode enabled. This
+  does not eliminate the minimum-width overflow limitation noted below.
 
 ## Compared with valign
 
@@ -110,24 +129,25 @@ Customize with `M-x customize-group RET org-table-widget RET`.
 promise: both use pixel measurements to align tables without rewriting their
 source text. They work at different layers. Valign visually aligns the existing
 table in place. `org-table-widget` covers the source with a separate, responsive
-rendering and reveals the source when it is time to edit.
+rendering and shows the source row by row as point moves through the table.
 
 | Capability | `org-table-widget` | Valign |
 | --- | --- | --- |
-| Display model | Builds a block widget and covers the source table with an overlay. | Adds display properties and overlays to spaces and separators in the existing table. |
+| Display model | Builds a row-by-row overlay rendering on top of the source table. | Adds display properties and overlays to spaces and separators in the existing table. |
 | Table formats | Org pipe tables. | Org, Markdown and `table.el` tables. |
-| Editing | Reveals the ordinary Org source when `e` is pressed on the table, then renders it again when point leaves. | Keeps the visually aligned source visible and editable. |
+| Editing | Stops on each row; the row under point shows ordinary Org source and is edited in place, with no key to press, while the other rows stay rendered. | Keeps the visually aligned source visible and editable. |
 | Mixed-width text | Pixel-aligns CJK, Latin text, emoji and inline code inside a fixed-pitch table. | Pixel-aligns the table as displayed, including variable-pitch text, CJK and images. |
 | Narrow windows | Allocates columns within the window budget, wraps cell content and reflows after resizing. | Keeps cells on one source line at their natural width; it does not provide responsive cell wrapping. |
 | Alignment | Supports explicit `<l>`, `<c>` and `<r>` Org cookies, including centered cells. | Infers left or right alignment from the source layout; Markdown center alignment is treated as left alignment. |
-| Presentation | Draws complete Unicode or ASCII borders, styles header rows, supports horizontal rules and optional zebra striping. | Preserves the source table's shape, with an optional fancy vertical-bar style. |
+| Presentation | Keeps the Org source table's own look: pipe-delimited cells, ruled divider rows, bold header rows and optional zebra striping across whole rows. | Preserves the source table's shape, with an optional fancy vertical-bar style. |
 | Large tables | Caches measurements and unchanged renderings and has no fixed source-size cutoff. | Defaults to a fixed-pitch fallback for tables larger than 4,000 characters. |
 | Requirements | Emacs 29.1+, Org 9.6+ and TextUI 0.8.0+; currently installed from source or with `package-vc`. | Emacs 26+ with no extra package dependency; available from GNU ELPA. |
 
 Choose Valign when the main goal is to keep an Org or Markdown table aligned
 while editing it, especially with variable-pitch text or inline images. Choose
 `org-table-widget` when an Org buffer needs a reading-oriented table that wraps
-to narrow windows and provides its own borders and row styling.
+to narrow windows, styles header and alternating rows, and still lets the row
+under point be edited as plain Org source.
 
 The packages should be treated as alternatives for the same Org table. Running
 both modes on one table is untested, and both manage display properties or
@@ -146,6 +166,10 @@ Known limitations:
 - Very wide tables can overflow the window when minimum column widths do not fit.
   Overflow is truncated when `truncate-lines` is non-nil (the Org default), or
   wraps when nil; the widget does not change `truncate-lines`.
+- After an edit the rows keep their old drawings until the table is laid out
+  again, on the next move to another row or after
+  `org-table-widget-relayout-delay` seconds of idle time. A cell that got much
+  wider can push the rest of the row past the window edge in the meantime.
 - Numeric columns are not automatically right-aligned; use an explicit `<r>` cookie.
 - The sticky header slows scrolling through large tables, in both directions;
   set `org-table-widget-sticky-header` to nil to avoid it.

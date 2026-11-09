@@ -82,7 +82,9 @@
                                                      (overlay-get segment 'before-string)
                                                      "\n")))
                                           (org-table-widget--segments overlay)))))
-                      (unless (>= lines (+ source-rows 2))
+                      ;; A table without an outer frame draws at least one
+                      ;; line per content row.
+                      (unless (>= lines source-rows)
                         (push (list :line (line-number-at-pos beg)
                                     :source-rows source-rows :rendered-lines lines)
                               problems)))))

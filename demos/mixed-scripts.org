@@ -1,5 +1,5 @@
 #+title: Mixed scripts and graphemes
-# Look for equal borders, intact graphemes, bidi order, and URL overflow.
+# Look for equal column widths, intact graphemes, bidi order, and URL overflow.
 
 | Key | Mixed text | Notes |
 |-----+------------+-------|

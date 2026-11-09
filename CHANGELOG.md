@@ -4,6 +4,18 @@
 
 ### Changes
 
+- Keep the Org source table's own look instead of drawing a box around it. Rows
+  render as `| cell | cell |` and horizontal rules as `|---+---|`; the drawn
+  top and bottom frames and the Unicode box-drawing characters are gone. Header
+  rows stay bold, and zebra striping still covers the whole row, separators
+  included.
+- Render each source row with its own overlay, so the row under point is left
+  as source and can be edited in place, with no key to press first. The other
+  rows stay rendered while you type; an edit never reveals the whole table.
+  Line motion inside a table only destroys the overlay of the row entered and
+  rebuilds the overlay of the row left. An edited table is laid out again when
+  point moves to another row, or after `org-table-widget-relayout-delay` idle
+  seconds, so the rows follow the new column widths.
 - Add `org-table-widget-enable-in-terminal` (default nil) to render table
   widgets on text terminals. Enabling on large tables is much slower there than
   in a graphical frame. Suggested by @hubisan (#7).
@@ -14,6 +26,21 @@
   Reddit by u/shipmints and u/vfclists.
   Known issue: while the sticky header is shown, scrolling through large
   tables is noticeably less smooth.
+
+### Breaking changes
+
+- Remove the `org-table-widget-use-unicode-borders` and
+  `org-table-widget-reveal-on-point` options. Tables now always follow the Org
+  source table's shape, and the row under point is always shown as source, so
+  neither an ASCII/Unicode border choice nor an automatic whole-table reveal
+  applies. Remove them from your configuration and customizations.
+- Remove the `org-table-widget-border` face, which styled the frame the
+  rendering no longer draws.
+- Remove the `org-table-widget-edit` command and the `org-table-widget-map`
+  keymap with its `e` binding. Editing needs no command: move onto a row and
+  edit its source directly. `org-table-widget-toggle` remains, and still
+  reveals the whole table at point and renders it again when run a second time
+  or when point leaves the table.
 
 ### Fixes
 
@@ -49,8 +76,8 @@
 
 - Stop on each row of a rendered table instead of on the table as a whole.
   Line motion walks through tables row by row and scrolling reaches every row,
-  so tables taller than the window can be read in full. `e` reveals the source
-  with point on the line of the row it rested on, and
+  so tables taller than the window can be read in full. The source could be
+  revealed with point on the line of the row it rested on, and
   `org-table-widget-toggle` renders a table with point on the row of the
   current line.
 
@@ -60,11 +87,11 @@
 
 - Stop revealing a table's source whenever point passes through it. Point now
   stops on the widget as on a single character, with the cursor on its top-left
-  corner, and steps past it on the next motion. Press `e`
-  (`org-table-widget-edit`, bound in the new `org-table-widget-map`) to edit
-  the source, which is laid out again when point leaves. Searches landing inside
-  a table still reveal it. `org-table-widget-reveal-on-point` now defaults to
-  nil; set it to `t` for the previous behavior.
+  corner, and steps past it on the next motion. A command revealed the source
+  on request, and it was laid out again when point left. Searches landing inside
+  a table still revealed it. Revealing the source on point entry became an
+  option that defaulted to nil. The request command, its keybinding and that
+  option are removed in the Unreleased release.
 
 ### Fixes
 

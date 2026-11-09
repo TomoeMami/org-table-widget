@@ -1,7 +1,7 @@
 #+title: Line numbers and fringes
 # Turn on display-line-numbers-mode, hide the fringes with
 # (set-window-fringes nil 0 0), then scroll to the end.  Every table must keep
-# its right border on the same screen line, including the last one, where the
+# its right edge on the same screen line, including the last one, where the
 # line numbers need one more digit than near the top of the buffer.
 
 | Topic             | Long description | URL |
@@ -106,4 +106,4 @@ Filler line 104 keeps the last table below line 100.
 | Topic        | Long description | URL |
 |--------------+------------------+-----|
 | Line numbers | Past line 100 the line numbers need three digits, so a table laid out near the top of the buffer must already leave room for them. | https://example.org/three-digit-line-numbers-need-one-more-column |
-| Fringes      | Without fringes Emacs keeps the last column of every screen line for the continuation glyph, so a full-width table would lose its right border. | https://example.org/continuation-glyph |
+| Fringes      | Without fringes Emacs keeps the last column of every screen line for the continuation glyph, so a full-width table would lose its right edge. | https://example.org/continuation-glyph |
