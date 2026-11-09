@@ -156,6 +156,29 @@ Pixel spaces are dropped, so the lines hold only the visible text."
      (should-not (memq 'org-table-widget-header
                        (ensure-list (get-text-property data 'face rendered)))))))
 
+(ert-deftest org-table-widget-render-row-faces ()
+  ;; Data rows alternate between the zebra face and the plain row face, so a
+  ;; table reads as a banded block against the buffer background.
+  (org-table-widget-tests--with-pixel-mocks
+   (let* ((table (list :rows '(("Head") hline ("1") ("2") ("3"))
+                       :alignments '(left) :header-rows 1))
+          (rows (org-table-widget--render-rows table nil 80))
+          (faces (mapcar (lambda (row)
+                           (get-text-property 0 'face (cdr row)))
+                         rows)))
+     (should (equal faces '(org-table-widget-header nil
+                            org-table-widget-row org-table-widget-zebra
+                            org-table-widget-row)))))
+  ;; Without zebra striping every data row takes the plain row face.
+  (org-table-widget-tests--with-pixel-mocks
+   (let* ((org-table-widget-zebra-stripe nil)
+          (table (list :rows '(("1") ("2")) :alignments '(left)
+                       :header-rows 0))
+          (rows (org-table-widget--render-rows table nil 80)))
+     (should (equal (mapcar (lambda (row) (get-text-property 0 'face (cdr row)))
+                            rows)
+                    '(org-table-widget-row org-table-widget-row))))))
+
 (ert-deftest org-table-widget-render-wraps-long-cells ()
   (org-table-widget-tests--with-pixel-mocks
    (let* ((long (mapconcat #'identity (make-list 12 "word") " "))

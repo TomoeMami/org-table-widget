@@ -132,6 +132,11 @@ to nil when smooth scrolling matters more."
     (t :inherit highlight))
   "Face for alternating data rows.")
 
+(defface org-table-widget-row
+  '((((class color) (background light)) :background "gray98")
+    (((class color) (background dark)) :background "gray13"))
+  "Face for rows that are not zebra striped.")
+
 ;;;; Pixel measurement
 
 (defconst org-table-widget--measure-x-limit 100000
@@ -645,7 +650,8 @@ PIXEL-BUDGET, when non-nil, overrides the column-derived pixel budget."
                                  (row-face (cond (header 'org-table-widget-header)
                                                  ((and org-table-widget-zebra-stripe
                                                        (= (mod data-row-index 2) 1))
-                                                  'org-table-widget-zebra))))
+                                                  'org-table-widget-zebra)
+                                                 (t 'org-table-widget-row))))
                             (unless header
                               (setq data-row-index (1+ data-row-index)))
                             (setq row-index (1+ row-index))

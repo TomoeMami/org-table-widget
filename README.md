@@ -110,6 +110,21 @@ Customize with `M-x customize-group RET org-table-widget RET`.
 | `org-table-widget-sticky-header` | `t` | Keep a scrolled-off table header in the header line. |
 | `org-table-widget-cell-properties` | `(face font-lock-face invisible display mouse-face help-echo keymap follow-link htmlize-link org-emphasis)` | Text properties retained in rendered cells. |
 
+### Faces
+
+The rendered table takes three faces, all customizable with
+`M-x customize-group RET org-table-widget RET`:
+
+| Face | Default | Used for |
+| --- | --- | --- |
+| `org-table-widget-row` | `gray98` / `gray13` background | Data rows that are not zebra striped. |
+| `org-table-widget-zebra` | `gray95` / `gray20` background | Every second data row, when `org-table-widget-zebra-stripe` is non-nil. |
+| `org-table-widget-header` | inherits `bold` | Header rows, the rows above the first horizontal rule. |
+
+Both row backgrounds are taken from the buffer background, so the table reads
+as a block of banded rows instead of dissolving into the surrounding text.
+Change them to match your theme.
+
 ### Compatibility
 
 - **`org-modern`:** Set `org-modern-table` to `nil` so the two packages do not
