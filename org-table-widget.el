@@ -39,8 +39,9 @@
 ;;
 ;; A table is drawn in the shape Org gives it: cells separated by
 ;; pipes, rules of dashes with a plus at each column boundary, and no
-;; outer frame.  Header rows are bold and every second data row takes
-;; the zebra face.
+;; outer frame.  Header rows are bold.  Every drawn row, header rows and
+;; rules included, alternates between two background faces, so the table
+;; reads as one block of bands.
 ;;
 ;; Each row is drawn on its own.  The row point rests on is left as
 ;; source, so point moves through a table one row at a time and the
@@ -82,7 +83,10 @@ Otherwise tables on a terminal stay as editable Org source."
   :type 'boolean)
 
 (defcustom org-table-widget-zebra-stripe t
-  "When non-nil, give every second data row the zebra face."
+  "When non-nil, alternate the background of the drawn rows.
+Every row the rendering draws takes its place in the bands, so header
+rows and horizontal rules are striped along with the data rows and the
+stripes run through the whole table."
   :type 'boolean)
 
 (defcustom org-table-widget-wrap-columns t
@@ -130,12 +134,15 @@ to nil when smooth scrolling matters more."
   '((((class color) (background light)) :background "gray95")
     (((class color) (background dark)) :background "gray20")
     (t :inherit highlight))
-  "Face for alternating data rows.")
+  "Face for every second drawn row of a table.
+Header rows and horizontal rules take it as well, so the bands run
+through the whole table rather than restarting after the header.")
 
 (defface org-table-widget-row
   '((((class color) (background light)) :background "gray98")
     (((class color) (background dark)) :background "gray13"))
-  "Face for rows that are not zebra striped.")
+  "Face for the drawn rows that do not take `org-table-widget-zebra'.
+Header rows and horizontal rules take it as well.")
 
 ;;;; Pixel measurement
 
@@ -569,6 +576,34 @@ plus and the dash must all advance by the same number of pixels."
                      widths "+")
           "|"))
 
+(defun org-table-widget--add-face (string faces)
+  "Return STRING with FACES added after the faces it already carries.
+FACES is a face or a list of faces.  Adding them one at a time keeps a
+row's faces flat: a face list handed to `add-face-text-property' whole
+would be nested rather than merged into the row's own faces."
+  (dolist (face (ensure-list faces))
+    (add-face-text-property 0 (length string) face t string))
+  string)
+
+(defun org-table-widget--band-face (index header rule)
+  "Return the face to draw on the row at INDEX among its table's drawn rows.
+The bands alternate across everything the rendering draws, so a table's
+header rows and horizontal rules sit in the same stripe as its data
+rows instead of starting a stripe of their own.  HEADER marks a header
+row, which keeps its bold face and takes its band underneath it; RULE
+marks a horizontal rule.  Return nil for a rule when zebra striping is
+off: it then keeps the buffer background, and so does a header row,
+which stays bold."
+  (let ((band (and org-table-widget-zebra-stripe
+                   (if (= (mod index 2) 1)
+                       'org-table-widget-zebra
+                     'org-table-widget-row))))
+    (cond (header (if band
+                      (list 'org-table-widget-header band)
+                    'org-table-widget-header))
+          (rule band)
+          (t (or band 'org-table-widget-row)))))
+
 (defun org-table-widget--padding-widths (padding alignment)
   "Split PADDING pixels into left and right widths for ALIGNMENT."
   (pcase alignment
@@ -610,9 +645,7 @@ and one between neighbouring cells."
          wrapped content-widths alignments)
         (push (concat "|" (string-join (nreverse parts) "|") "|") lines)))
     (let ((row (string-join (nreverse lines) "\n")))
-      (when row-face
-        (add-face-text-property 0 (length row) row-face t row))
-      row)))
+      (org-table-widget--add-face row row-face))))
 
 (defun org-table-widget--source-line (string line)
   "Mark STRING as drawn for source LINE and return it.
@@ -625,7 +658,9 @@ LINE is an offset from the first line of the table, or nil."
   "Lay TABLE out in WINDOW at WIDTH and return one (LINE . STRING) per row.
 LINE is the offset of the row's source line from the table start.  A
 row whose cells wrap occupies several lines of its STRING.
-PIXEL-BUDGET, when non-nil, overrides the column-derived pixel budget."
+Every drawn row, rules and header rows included, takes its place in the
+table's alternating bands.  PIXEL-BUDGET, when non-nil, overrides the
+column-derived pixel budget."
   (let* ((rows (plist-get table :rows))
          (lines (plist-get table :lines))
          (alignments (plist-get table :alignments))
@@ -636,8 +671,8 @@ PIXEL-BUDGET, when non-nil, overrides the column-derived pixel budget."
          (boundary-pixels (org-table-widget--boundary-pixels window))
          (widths (org-table-widget--widths rows columns pixel-budget
                                            boundary-pixels window))
+         (band-index 0)
          (row-index 0)
-         (data-row-index 0)
          rendered)
     (cl-loop for row in rows
              for line = (pop lines)
@@ -645,20 +680,19 @@ PIXEL-BUDGET, when non-nil, overrides the column-derived pixel budget."
                  (cons line
                        (org-table-widget--source-line
                         (if (eq row 'hline)
-                            (org-table-widget--rule widths window)
-                          (let* ((header (< row-index header-rows))
-                                 (row-face (cond (header 'org-table-widget-header)
-                                                 ((and org-table-widget-zebra-stripe
-                                                       (= (mod data-row-index 2) 1))
-                                                  'org-table-widget-zebra)
-                                                 (t 'org-table-widget-row))))
-                            (unless header
-                              (setq data-row-index (1+ data-row-index)))
-                            (setq row-index (1+ row-index))
-                            (org-table-widget--row row widths alignments row-face
-                                                   window)))
+                            (org-table-widget--add-face
+                             (org-table-widget--rule widths window)
+                             (org-table-widget--band-face band-index nil t))
+                          (org-table-widget--row
+                           row widths alignments
+                           (org-table-widget--band-face
+                            band-index (< row-index header-rows) nil)
+                           window))
                         line))
-                 rendered))
+                 rendered)
+             do (setq band-index (1+ band-index))
+             unless (eq row 'hline)
+             do (setq row-index (1+ row-index)))
     (nreverse rendered)))
 
 (defun org-table-widget--render (table window width &optional pixel-budget)

@@ -12,7 +12,14 @@
 - Add `org-table-widget-row`, the face for data rows that are not zebra
   striped. Every data row now takes a background, so the table reads as a block
   of banded rows instead of dissolving into the buffer text; recolor the face,
-  or set `org-table-widget-zebra-stripe` to nil for a single flat band.
+  or set `org-table-widget-zebra-stripe` to nil for a single flat band of data
+  rows.
+- Stripe header rows and horizontal rules along with the data rows. The bands
+  alternate over every row the rendering draws, so the stripes run unbroken
+  through the whole table instead of starting again below the header. A header
+  row keeps its bold face on top of its band; with `org-table-widget-zebra-stripe`
+  set to nil, the header stays bold without a background and the rules keep the
+  buffer background.
 - Render each source row with its own overlay, so the row under point is left
   as source and can be edited in place, with no key to press first. The other
   rows stay rendered while you type; an edit never reveals the whole table.

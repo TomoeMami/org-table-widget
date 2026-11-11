@@ -103,7 +103,7 @@ Customize with `M-x customize-group RET org-table-widget RET`.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `org-table-widget-enable-in-terminal` | `nil` | Render table widgets on text terminals as well. |
-| `org-table-widget-zebra-stripe` | `t` | Alternate data-row backgrounds. |
+| `org-table-widget-zebra-stripe` | `t` | Alternate the background of the drawn rows. |
 | `org-table-widget-wrap-columns` | `t` | Wrap cell content; nil uses natural widths. |
 | `org-table-widget-max-width-fraction` | `1.0` | Fraction of the window body width available to the table. |
 | `org-table-widget-relayout-delay` | `0.15` | Idle seconds before resize relayout; zero or negative means immediate. |
@@ -117,13 +117,18 @@ The rendered table takes three faces, all customizable with
 
 | Face | Default | Used for |
 | --- | --- | --- |
-| `org-table-widget-row` | `gray98` / `gray13` background | Data rows that are not zebra striped. |
-| `org-table-widget-zebra` | `gray95` / `gray20` background | Every second data row, when `org-table-widget-zebra-stripe` is non-nil. |
+| `org-table-widget-row` | `gray98` / `gray13` background | Drawn rows that are not zebra striped, rules included. |
+| `org-table-widget-zebra` | `gray95` / `gray20` background | Every second drawn row, rules and header rows included, when `org-table-widget-zebra-stripe` is non-nil. |
 | `org-table-widget-header` | inherits `bold` | Header rows, the rows above the first horizontal rule. |
 
-Both row backgrounds are taken from the buffer background, so the table reads
-as a block of banded rows instead of dissolving into the surrounding text.
-Change them to match your theme.
+The bands alternate over every row the rendering draws, so the header rows and
+the horizontal rules are striped along with the data rows and the stripes run
+unbroken through the whole table. A header row keeps its bold face on top of
+its band. Both backgrounds are taken from the buffer background, so the table
+reads as a block of banded rows instead of dissolving into the surrounding
+text. Change them to match your theme; set `org-table-widget-zebra-stripe` to
+`nil` for a single flat band, which leaves the header bold and the rules
+unbanded.
 
 ### Compatibility
 
