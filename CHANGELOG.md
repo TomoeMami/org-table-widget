@@ -55,6 +55,18 @@
 
 ### Fixes
 
+- Stop rows of a table from flashing over the row being edited. Deleting a
+  character on the row point rests on can turn that line into something that no
+  longer reads as a table row, as removing its leading `|` or its final newline
+  does. The edit then belonged to no table: the buffer text no longer started
+  one there and the row point rests on carries no overlay, so the table was
+  never told to lay itself out again. Its stale layout drew the row back from
+  spans that by then covered the rows below, so the rows below flashed over the
+  source for a moment and then went away. The table point rested in is now
+  remembered before each command, so the edit reaches it even when nothing in
+  the buffer or the overlays still points at it. The overlay lookup also treats
+  an edit that starts exactly where an overlay does as covered, which a deletion
+  reports.
 - Let Evil's `gg` and `G` jump past tables. Evil reports these jumps as
   `next-line`, so the row stop meant for line motion caught them and left point
   on the table's first or last row. Only commands that move by a line now stop

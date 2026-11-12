@@ -880,6 +880,13 @@ point leaves them or the command runs on one of them again.")
   "The (BEG . LINE) row whose source is shown because point rests on it.
 That row has no overlay; the rest of its table stays drawn.")
 
+(defvar-local org-table-widget--point-row-table nil
+  "The table whose row point rested on before the current command.
+That row has no overlay, so once an edit turns its line into something
+other than a table row, neither the buffer text nor the overlays still
+show which table the edit broke.  Recording the table beforehand lets
+`org-table-widget--after-change' report the edit to it anyway.")
+
 (defvar-local org-table-widget--dirty nil
   "Starts of the tables edited since their last layout.
 Their rows keep the overlays they have until point moves through the
@@ -987,21 +994,47 @@ has been idle for `org-table-widget-relayout-delay' seconds."
       (and org-table-widget--render-cache
            (gethash beg org-table-widget--render-cache))))
 
+(defun org-table-widget--point-row-table-at (_beg _end)
+  "Return the table point rested in before the current command, or nil.
+The row point rests on keeps no overlay, so a deletion on it is reported
+by neither the buffer text, once the line no longer reads as a table
+row, nor by an overlay.  Remembering the table from before the command
+lets that edit reach it."
+  (when-let* ((beg org-table-widget--point-row-table)
+              ((org-table-widget--table-still-starts-p beg)))
+    beg))
+
+(defun org-table-widget--table-still-starts-p (beg)
+  "Return non-nil when BEG is still the start of a table in the buffer.
+An edit may have turned the line at BEG into something else, or removed
+it altogether, while the table it used to start is still drawn."
+  (save-excursion
+    (goto-char (min beg (point-max)))
+    (org-at-table-p)))
+
 (defun org-table-widget--after-change (beg end &rest _)
   "Note that an edit between BEG and END touched a table.
 The row point rests on has no overlay, so an edit inside it is reported
-here rather than by an overlay hook.  Look for the table at the edit and
-in the overlays covering it instead of scanning the buffer."
+here rather than by an overlay hook.  Look for the table at the edit, in
+the overlays covering it, and in the table point rested in before the
+command, instead of scanning the buffer."
   (when org-table-widget-mode
     (let* ((beg (min beg (point-max)))
            (end (min end (point-max)))
            (table (or (org-table-widget--table-at beg)
                       (org-table-widget--table-at end)
+                      (org-table-widget--point-row-table-at beg end)
                       (when-let* ((overlay
                                    (seq-find
                                     (lambda (overlay)
                                       (and (overlay-buffer overlay)
-                                           (< (overlay-start overlay) end)
+                                           ;; A deletion reports BEG equal to
+                                           ;; END, so an overlay that starts
+                                           ;; exactly there still covers the
+                                           ;; edit; a strict comparison would
+                                           ;; miss it and leave the table's
+                                           ;; layout pointing at moved source.
+                                           (<= (overlay-start overlay) end)
                                            (> (overlay-end overlay) beg)))
                                     org-table-widget--overlays)))
                         (overlay-get overlay 'org-table-widget-table)))))
@@ -1448,8 +1481,12 @@ this hook with the buffer widened."
       (org-table-widget--schedule-relayout))))
 
 (defun org-table-widget--pre-command ()
-  "Record point so line motion that skipped rows can be noticed."
-  (set-marker org-table-widget--previous-point (point)))
+  "Record point so line motion that skipped rows can be noticed.
+Also remember the table point rests in: the row under point carries no
+overlay, so once an edit turns that row into something other than table
+text, this is the only record left of which table the edit broke."
+  (set-marker org-table-widget--previous-point (point))
+  (setq org-table-widget--point-row-table (org-table-widget--table-at (point))))
 
 (defconst org-table-widget--line-motion-commands
   '(previous-line next-line

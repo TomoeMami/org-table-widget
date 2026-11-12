@@ -492,6 +492,73 @@ Pixel spaces are dropped, so the lines hold only the visible text."
                  (should (org-table-widget--overlay-at start)))
              (org-table-widget-mode -1))))))))
 
+(ert-deftest org-table-widget-deleting-on-the-source-row-keeps-its-source ()
+  ;; Deleting a character on the row point rests on can turn that line into
+  ;; something other than a table row, for instance when the leading pipe
+  ;; goes.  The row then belongs to no table as far as the buffer text and
+  ;; the overlays are concerned, but the table it came from must still be
+  ;; told about the edit: otherwise its stale layout draws the row again from
+  ;; spans that now cover the rows below, and the rows flash over the source.
+  (dolist (case '((delete-leading-pipe . beginning-of-line)
+                  (delete-letter-in-cell . search-forward)))
+    (org-table-widget-tests--with-org
+        "Prose\n| Name | Qty |\n|------+-----|\n| apple | 3 |\n| pear | 12 |\n| fig | 777 |\n"
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (org-table-widget-tests--with-pixel-mocks
+         (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+           (let ((org-table-widget-relayout-delay 3600))
+             (unwind-protect
+                 (progn
+                   (org-table-widget-mode 1)
+                   ;; Point rests on the "apple" row, which stays as source.
+                   (search-forward "apple")
+                   (beginning-of-line)
+                   (org-table-widget--post-command)
+                   (should-not (org-table-widget--overlay-at (point)))
+                   (pcase (car case)
+                     ('delete-leading-pipe (beginning-of-line))
+                     ('delete-letter-in-cell (search-forward "ppl")))
+                   (org-table-widget--pre-command)
+                   (delete-char (if (eq (car case) 'delete-letter-in-cell) 1 1))
+                   ;; Nothing may draw over the line point rests on: its
+                   ;; source is what the user is editing.
+                   (should-not
+                    (and (org-table-widget--overlay-at (point))
+                         (overlay-get (org-table-widget--overlay-at (point))
+                                      'org-table-widget-row)))
+                   (org-table-widget--post-command)
+                   (should-not
+                    (and (org-table-widget--overlay-at (point))
+                         (overlay-get (org-table-widget--overlay-at (point))
+                                      'org-table-widget-row))))
+               (org-table-widget-mode -1)))))))))
+
+(ert-deftest org-table-widget-delete-at-row-start-marks-the-table-dirty ()
+  ;; A deletion reports BEG equal to END, so an overlay that starts exactly
+  ;; at the edit still covers it.  Missing that leaves the table's layout
+  ;; cached against source that has moved.
+  (org-table-widget-tests--with-org "| a | b |\n| c | d |\n"
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-table-widget-tests--with-pixel-mocks
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (let ((org-table-widget-relayout-delay 3600)
+               (start (caar (org-table-widget--tables))))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 ;; Point is on the first row, so that row has no overlay and
+                 ;; the second row's overlay starts exactly where the edit
+                 ;; lands once the first row's newline goes.
+                 (goto-char start)
+                 (org-table-widget--post-command)
+                 (end-of-line)
+                 (org-table-widget--pre-command)
+                 (delete-char 1)
+                 (should (memq start org-table-widget--dirty)))
+             (org-table-widget-mode -1))))))))
+
 (ert-deftest org-table-widget-toggle-reveals-and-draws-a-table ()
   (org-table-widget-tests--with-org "Before\n| a | b |\n| c | d |\nAfter\n"
     (save-window-excursion
