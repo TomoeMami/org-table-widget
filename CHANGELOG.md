@@ -56,6 +56,15 @@
 
 ### Fixes
 
+- Stop rows from being drawn over half a source line. A span was located by
+  stepping on from the previous row, so an offset that repeated or went out of
+  order moved point backwards and left the span starting inside a line. Only
+  part of that line was replaced, so the rest of it showed through beside the
+  drawing: a table appeared to draw each row and then repeat a piece of it, once
+  for every row, and the stray text could cover the rows below.  Spans are now
+  located from the table start for each row, empty spans are folded into a
+  neighbour, and a row is only drawn from a span that begins at the start of a
+  line.  This is the flaky one that came and went with the window size.
 - Stop rows of a table from flashing over the row being edited. Deleting a
   character on the row point rests on can turn that line into something that no
   longer reads as a table row, as removing its leading `|` does. The row then

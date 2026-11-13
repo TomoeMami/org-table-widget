@@ -813,6 +813,45 @@ Pixel spaces are dropped, so the lines hold only the visible text."
          (should-not org-table-widget--render-cache)
          (should (org-table-widget--table-overlays (point-min))))))))
 
+(ert-deftest org-table-widget-spans-start-at-line-beginnings ()
+  ;; A rendering can lose the source line it was laid out for, leaving a
+  ;; repeated or out-of-order offset.  Spans are located from the table start
+  ;; rather than by stepping on from the previous row, so none of them can
+  ;; begin inside a line: a span that did would have `display' replace only
+  ;; part of its source line, and the rest of the line would show through
+  ;; beside the drawing.
+  (org-table-widget-tests--with-org "| a | 1 |\n| b | 2 |\n| c | 3 |\n| d | 4 |\n"
+    (let ((beg (point-min))
+          (end (point-max)))
+      (dolist (rows (list (list (cons 0 "r0") (cons 1 "r1") (cons 2 "r2"))
+                          ;; Every offset collapsed to the default value.
+                          (list (cons 0 "r0") (cons 0 "r1") (cons 0 "r2"))
+                          ;; Out of order.
+                          (list (cons 2 "r2") (cons 0 "r0") (cons 3 "r3"))
+                          ;; Repeated, and nil for a missing offset.
+                          (list (cons 0 "r0") (cons 1 "r1") (cons 1 "r1b"))
+                          (list (cons nil "r0") (cons 1 "r1"))))
+        (dolist (span (org-table-widget--drop-empty-spans
+                       (org-table-widget--row-spans beg end rows)))
+          (should (< (nth 2 span) (nth 3 span)))
+          (should (or (= (nth 2 span) beg)
+                      (eq (char-before (nth 2 span)) ?\n))))))))
+
+(ert-deftest org-table-widget-spans-cover-the-whole-table ()
+  ;; Between them, the spans replace every line of the table exactly once,
+  ;; and the last one reaches the end.
+  (org-table-widget-tests--with-org "| a | 1 |\n| b | 2 |\n| c | 3 |\n"
+    (let* ((beg (point-min))
+           (end (point-max))
+           (rows (list (cons 0 "r0") (cons 1 "r1") (cons 2 "r2")))
+           (spans (org-table-widget--drop-empty-spans
+                   (org-table-widget--row-spans beg end rows))))
+      (should (= (nth 2 (car spans)) beg))
+      (should (= (nth 3 (car (last spans))) end))
+      (cl-loop for (a b) on spans
+               while b
+               do (should (= (nth 3 a) (nth 2 b)))))))
+
 (ert-deftest org-table-widget-rows-cover-their-source-lines ()
   (require 'textui)
   ;; Source lines a row does not draw itself, such as alignment cookies,

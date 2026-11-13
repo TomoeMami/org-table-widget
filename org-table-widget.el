@@ -1075,24 +1075,65 @@ fonts, prefixes and the options that change the drawing."
   "Return (LINE STRING START END) for each rendering of ROWS in BEG..END.
 ROWS is a list of (LINE . STRING) in source order.  A row covers its
 source line and, up to the next row, the lines without a rendering of
-their own such as alignment cookies."
-  (let ((line 0)
+their own such as alignment cookies.
+
+Each span starts at the beginning of a source line, located from BEG
+afresh instead of stepping on from the previous row.  Stepping would
+move point backwards if an offset ever repeated or went out of order,
+as it does when a rendering loses the line it was laid out for, and the
+span would then begin inside a line.  Such a span replaces only part of
+its source line, leaving the rest of that line visible beside the
+drawing."
+  (let ((starts (save-excursion
+                  (let (positions)
+                    (dolist (row rows)
+                      (goto-char beg)
+                      (forward-line (if (integerp (car row)) (car row) 0))
+                      (push (line-beginning-position) positions))
+                    (nreverse positions))))
         entries)
-    (save-excursion
-      (goto-char beg)
-      (dolist (row rows)
-        (forward-line (- (car row) line))
-        (setq line (car row))
-        (push (list (car row) (cdr row) (point)) entries)))
+    ;; Two renderings can name the same line.  Keep one span for both, so
+    ;; that no span is left with nothing to replace.
+    (cl-loop for row in rows
+             for start in starts
+             do (if (and entries (= start (nth 2 (car entries))))
+                    (setcar (nthcdr 1 (car entries))
+                            (concat (nth 1 (car entries)) "\n" (cdr row)))
+                  (push (list (car row) (cdr row) start) entries)))
     (setq entries (nreverse entries))
     ;; The first row covers any leading rule the parser dropped, so that
-    ;; every line of the table is replaced by a row.
+    ;; every line of the table is replaced by a row.  Bounds are forced to
+    ;; ascend, so a repeated or out-of-order offset cannot make a span end
+    ;; before it starts.
     (let ((bounds (append (mapcar #'cl-third entries) (list end))))
       (when bounds (setcar bounds beg))
+      (let ((previous beg))
+        (setq bounds (mapcar (lambda (position)
+                               (setq previous (max previous position))
+                               previous)
+                             bounds)))
       (cl-loop for entry in entries
                for start in bounds
                for next in (cdr bounds)
                collect (list (nth 0 entry) (nth 1 entry) start next)))))
+
+(defun org-table-widget--drop-empty-spans (spans)
+  "Return SPANS with the ones that cover no text folded into a neighbour.
+A span whose start and end meet replaces nothing, so `display' would
+leave the whole line it was meant for showing.  Its drawing belongs with
+the span before it, which covers the rest of that line, or the one after
+it when it comes first."
+  (let (kept)
+    (dolist (span spans)
+      (if (>= (nth 2 span) (nth 3 span))
+          (cond ((and kept (= (nth 3 (car kept)) (nth 2 span)))
+                 (setcar (nthcdr 1 (car kept))
+                         (concat (nth 1 (car kept)) "\n" (nth 1 span))))
+                (kept
+                 (setcar (nthcdr 3 (car kept)) (nth 3 span)))
+                (t nil))
+        (push span kept)))
+    (nreverse kept)))
 
 (defun org-table-widget--layout-table (beg end window width)
   "Return the laid-out rows of the table between BEG and END in WINDOW.
@@ -1127,7 +1168,8 @@ no table.  Layout is cached per table and reused across relayouts."
                                          :pixel-budget pixel-budget))
                  (rows (org-table-widget--rows
                         (textui-layout-widget widget columns)))
-                 (spans (org-table-widget--row-spans beg end rows)))
+                 (spans (org-table-widget--drop-empty-spans
+                         (org-table-widget--row-spans beg end rows))))
             (widget-put widget :sticky-header
                         (org-table-widget--sticky-header table spans))
             (setq cached (list key widget spans beg end))))
@@ -1241,16 +1283,23 @@ WIDGET is the laid-out table the rendering of the row belongs to."
              (org-table-widget--layout-width window))))))
 
 (defun org-table-widget--span-table-p (span)
-  "Return non-nil when SPAN begins on a line of table text.
+  "Return non-nil when SPAN covers a whole line of table text.
 An edit can turn the row a span was laid out for into something else, or
 move it, leaving the span over the lines below.  Drawing that span back
-would put those lines' text where the edited row is."
-  (let ((start (nth 2 span)))
+would put those lines' text where the edited row is.  A span that begins
+inside a line is refused too: `display' would replace only its part, and
+the rest of the line would show through around the drawing."
+  (let ((start (nth 2 span))
+        (end (nth 3 span)))
     (and (integer-or-marker-p start)
+         (integer-or-marker-p end)
+         (< start end)
          (<= start (point-max))
          (save-excursion
            (goto-char start)
-           (org-at-table-p)))))
+           (and (or (= start (point-min))
+                    (eq (char-before start) ?\n))
+                (org-at-table-p))))))
 
 (defun org-table-widget--show-row (row)
   "Draw ROW, a (BEG . LINE) pair, when its table is not revealed.
