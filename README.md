@@ -76,9 +76,12 @@ shows the source of the row you enter.
 Editing a cell keeps the rest of the table rendered: only the row under point
 is source, and the other rows keep their drawings while you type. An edit can
 change how wide a column is, and every row is drawn from the widths of all the
-table's cells, so the table is laid out again once point moves to another row;
-the row you move to is then the only one left as source. The relayout also runs
-on its own after `org-table-widget-relayout-delay` seconds of idle time.
+table's cells, so the table is laid out again once point leaves the row you
+edited, whether it moves to another row or out of the table; the row you move
+to is then the only one left as source. The table is deliberately not laid out
+while point stays on that row: redrawing it there makes the rows around the
+cursor jump, and a run of edits then costs one layout when the row is left
+instead of one per character.
 
 `M-x org-table-widget-toggle` reveals the whole table at point as source, so
 that a command can work on several rows at once, for example `org-table`
@@ -106,7 +109,7 @@ Customize with `M-x customize-group RET org-table-widget RET`.
 | `org-table-widget-zebra-stripe` | `t` | Alternate the background of the drawn rows. |
 | `org-table-widget-wrap-columns` | `t` | Wrap cell content; nil uses natural widths. |
 | `org-table-widget-max-width-fraction` | `1.0` | Fraction of the window body width available to the table. |
-| `org-table-widget-relayout-delay` | `0.15` | Idle seconds before resize relayout; zero or negative means immediate. |
+| `org-table-widget-relayout-delay` | `0.15` | Idle seconds before a relayout after a resize or a font change; zero or negative means immediate. |
 | `org-table-widget-sticky-header` | `t` | Keep a scrolled-off table header in the header line. |
 | `org-table-widget-cell-properties` | `(face font-lock-face invisible display mouse-face help-echo keymap follow-link htmlize-link org-emphasis)` | Text properties retained in rendered cells. |
 
@@ -186,10 +189,9 @@ Known limitations:
 - Very wide tables can overflow the window when minimum column widths do not fit.
   Overflow is truncated when `truncate-lines` is non-nil (the Org default), or
   wraps when nil; the widget does not change `truncate-lines`.
-- After an edit the rows keep their old drawings until the table is laid out
-  again, on the next move to another row or after
-  `org-table-widget-relayout-delay` seconds of idle time. A cell that got much
-  wider can push the rest of the row past the window edge in the meantime.
+- After an edit the rows keep their old drawings until point leaves the edited
+  row; a cell that got much wider can push the rest of the row past the window
+  edge in the meantime, until the table is laid out again on the next move.
 - Numeric columns are not automatically right-aligned; use an explicit `<r>` cookie.
 - The sticky header slows scrolling through large tables, in both directions;
   set `org-table-widget-sticky-header` to nil to avoid it.

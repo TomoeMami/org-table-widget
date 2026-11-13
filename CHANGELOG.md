@@ -24,9 +24,10 @@
   as source and can be edited in place, with no key to press first. The other
   rows stay rendered while you type; an edit never reveals the whole table.
   Line motion inside a table only destroys the overlay of the row entered and
-  rebuilds the overlay of the row left. An edited table is laid out again when
-  point moves to another row, or after `org-table-widget-relayout-delay` idle
-  seconds, so the rows follow the new column widths.
+  rebuilds the overlay of the row left. An edited table is laid out again once
+  point leaves the edited row, so the rows follow the new column widths. It is
+  not laid out while point stays there, so typing never redraws the table under
+  the cursor.
 - Add `org-table-widget-enable-in-terminal` (default nil) to render table
   widgets on text terminals. Enabling on large tables is much slower there than
   in a graphical frame. Suggested by @hubisan (#7).
@@ -57,16 +58,17 @@
 
 - Stop rows of a table from flashing over the row being edited. Deleting a
   character on the row point rests on can turn that line into something that no
-  longer reads as a table row, as removing its leading `|` or its final newline
-  does. The edit then belonged to no table: the buffer text no longer started
-  one there and the row point rests on carries no overlay, so the table was
-  never told to lay itself out again. Its stale layout drew the row back from
-  spans that by then covered the rows below, so the rows below flashed over the
-  source for a moment and then went away. The table point rested in is now
-  remembered before each command, so the edit reaches it even when nothing in
-  the buffer or the overlays still points at it. The overlay lookup also treats
-  an edit that starts exactly where an overlay does as covered, which a deletion
-  reports.
+  longer reads as a table row, as removing its leading `|` does. The row then
+  belongs to no table: the buffer text no longer starts one there and the row
+  point rests on carries no overlay, so nothing named the table and it was
+  never marked for layout. Its stale spans pointed at source that had moved down
+  a line, and the next command drew rows back from them, so other rows of the
+  table appeared over the source for a moment and then went away. Three things
+  kept that from being noticed, and all three are fixed: the table point rested
+  in is remembered before each command; an edit that starts exactly where an
+  overlay does counts as covered, which is the range a deletion reports; and a
+  row is only drawn back from a span that still starts on table text, while a
+  table whose first row no longer starts one is cleared instead.
 - Let Evil's `gg` and `G` jump past tables. Evil reports these jumps as
   `next-line`, so the row stop meant for line motion caught them and left point
   on the table's first or last row. Only commands that move by a line now stop

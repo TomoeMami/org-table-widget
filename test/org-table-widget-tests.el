@@ -492,6 +492,82 @@ Pixel spaces are dropped, so the lines hold only the visible text."
                  (should (org-table-widget--overlay-at start)))
              (org-table-widget-mode -1))))))))
 
+(ert-deftest org-table-widget-editing-waits-to-lay-the-table-out ()
+  ;; A table is not laid out while point stays on the row being edited:
+  ;; redrawing it there makes the rows around the cursor jump, and a run of
+  ;; edits then costs one layout when the row is left instead of one per
+  ;; character.  Point leaving the row, for another row of the table or for
+  ;; text outside it, lays the table out once.
+  (org-table-widget-tests--with-org "Before\n| a | b |\n| c | d |\n| e | f |\nAfter\n"
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-table-widget-tests--with-pixel-mocks
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (let ((org-table-widget-relayout-delay 3600)
+               (layouts 0))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 (cl-letf (((symbol-function 'org-table-widget--lay-out-edited)
+                            (lambda (beg)
+                              (setq layouts (1+ layouts))
+                              (org-table-widget--draw-table beg))))
+                   ;; Type into one row: no layout while point stays there.
+                   (goto-char (point-min))
+                   (forward-line 2)
+                   (org-table-widget--pre-command)
+                   (org-table-widget--post-command)
+                   (dotimes (_ 3)
+                     (org-table-widget--pre-command)
+                     (forward-char 2)
+                     (insert "X")
+                     (org-table-widget--post-command))
+                   (should (= layouts 0))
+                   (should (memq (caar (org-table-widget--tables))
+                                 org-table-widget--dirty))
+                   ;; Leaving that row lays the table out exactly once.
+                   (org-table-widget--pre-command)
+                   (forward-line 1)
+                   (org-table-widget--post-command)
+                   (should (= layouts 1))
+                   (should-not org-table-widget--dirty)
+                   ;; Same for leaving the table altogether after another
+                   ;; edit: the layout waits for point to go, then runs once.
+                   (org-table-widget--pre-command)
+                   (forward-char 2)
+                   (insert "Q")
+                   (org-table-widget--post-command)
+                   (should (= layouts 1))
+                   (org-table-widget--pre-command)
+                   (goto-char (point-min))
+                   (org-table-widget--post-command)
+                   (should (= layouts 2))
+                   (should-not org-table-widget--dirty)))
+             (org-table-widget-mode -1))))))))
+
+(ert-deftest org-table-widget-editing-does-not-schedule-a-relayout ()
+  ;; Only a change of the layout inputs schedules an idle relayout.  An edit
+  ;; waits for point to leave its row, so no timer redraws the table while
+  ;; the person is still typing.
+  (org-table-widget-tests--with-org "Before\n| a | b |\n| c | d |\nAfter\n"
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-table-widget-tests--with-pixel-mocks
+       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+         (let ((org-table-widget-relayout-delay 0.15))
+           (unwind-protect
+               (progn
+                 (org-table-widget-mode 1)
+                 (search-forward "| c | d |")
+                 (goto-char (match-beginning 0))
+                 (org-table-widget--pre-command)
+                 (org-table-widget--post-command)
+                 (org-table-widget--pre-command)
+                 (insert "X")
+                 (org-table-widget--post-command)
+                 (should-not org-table-widget--timer))
+             (org-table-widget-mode -1))))))))
+
 (ert-deftest org-table-widget-deleting-on-the-source-row-keeps-its-source ()
   ;; Deleting a character on the row point rests on can turn that line into
   ;; something other than a table row, for instance when the leading pipe

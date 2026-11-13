@@ -982,11 +982,16 @@ was until the table is laid out again."
 The rows of the table keep the overlays they have, so the rest of the
 table stays drawn while the row point rests on is edited as source.  An
 edit can change a column's width, and every row is drawn from the widths
-of all the table's cells, so the table is laid out again once the buffer
-has been idle for `org-table-widget-relayout-delay' seconds."
+of all the table's cells, so the table is laid out again.
+
+That happens once point leaves the edited row, not while it stays
+there: laying the table out mid-edit would redraw the rows around the
+cursor and make the table jump under the person typing.  Waiting for
+point to move also covers a whole run of edits, however long, with a
+single layout.  The drawing the other rows keep until then is the one
+they had when the edit began."
   (add-to-list 'org-table-widget--dirty beg)
-  (org-table-widget--invalidate-render-cache)
-  (org-table-widget--schedule-relayout))
+  (org-table-widget--invalidate-render-cache))
 
 (defun org-table-widget--edited-p (beg)
   "Return non-nil when an edit touched the table starting at BEG."
@@ -1235,16 +1240,32 @@ WIDGET is the laid-out table the rendering of the row belongs to."
          (or org-table-widget--width
              (org-table-widget--layout-width window))))))
 
+(defun org-table-widget--span-table-p (span)
+  "Return non-nil when SPAN begins on a line of table text.
+An edit can turn the row a span was laid out for into something else, or
+move it, leaving the span over the lines below.  Drawing that span back
+would put those lines' text where the edited row is."
+  (let ((start (nth 2 span)))
+    (and (integer-or-marker-p start)
+         (<= start (point-max))
+         (save-excursion
+           (goto-char start)
+           (org-at-table-p)))))
+
 (defun org-table-widget--show-row (row)
   "Draw ROW, a (BEG . LINE) pair, when its table is not revealed.
 The row's rendering comes from the table's last layout, so drawing it
-again costs no measuring."
+again costs no measuring.  A layout that no longer matches the buffer,
+as after an edit moved or broke the row, is left out: the table is laid
+out again once point leaves the edited row, and its rows are drawn from
+that layout."
   (when (and row
              (not (org-table-widget--revealed-p (car row)))
              (not (org-table-widget--row-overlay row)))
     (when-let* ((cached (org-table-widget--table-layout (car row)))
                 (span (seq-find (lambda (span) (eql (car span) (cdr row)))
-                                (nth 2 cached))))
+                                (nth 2 cached)))
+                ((org-table-widget--span-table-p span)))
       (org-table-widget--make-row-overlay (car row) span (nth 1 cached)))))
 
 (defun org-table-widget--display-table (beg end window width)
@@ -1310,36 +1331,61 @@ The row point rests on keeps its source visible; a table revealed with
      (or org-table-widget--width
          (org-table-widget--layout-width window)))))
 
+(defun org-table-widget--lay-out-edited (beg)
+  "Lay the edited table starting at BEG out again, unless it is revealed.
+BEG leaves the dirty list, so point moving around the table does not lay
+it out a second time.  A table the edit left without a start is simply
+cleared, since it can no longer be parsed from that position."
+  (let ((revealed (org-table-widget--revealed-p beg)))
+    (org-table-widget--drop-table beg)
+    (unless revealed
+      (org-table-widget--draw-table beg))))
+
 (defun org-table-widget--sync-row ()
   "Keep the drawn rows in step with point.
 Draw the row point left, delete the row point arrived on, and draw a
 table again after an edit dropped its rows.  A move inside a table
 touches two rows: the rest of the table keeps the overlays it has."
   (let* ((beg (org-table-widget--table-at (point)))
-         (row (and beg (org-table-widget--row-at-position (point)))))
-    ;; An edited table is laid out again on the next command that moves
-    ;; point to another row, so the rows follow the new column widths.  The
-    ;; row point rests on stays as source either way, and the rest of the
-    ;; table is drawn from the new layout.
-    (when beg
-      (cond
-       ((and (memq beg org-table-widget--dirty)
-             (not (equal row org-table-widget--point-row)))
-        (setq org-table-widget--dirty (delq beg org-table-widget--dirty))
-        (if (org-table-widget--revealed-p beg)
-            (org-table-widget--drop-table beg)
-          (org-table-widget--draw-table beg)))
-       ((and (not (org-table-widget--revealed-p beg))
-             (null (org-table-widget--table-overlays beg)))
-        (org-table-widget--draw-table beg))))
+         (row (and beg (org-table-widget--row-at-position (point))))
+         (previous org-table-widget--point-row)
+         (previous-point (and (markerp org-table-widget--previous-point)
+                              (marker-position
+                               org-table-widget--previous-point)))
+         (previous-line (and previous-point
+                             (line-number-at-pos previous-point))))
+    ;; An edit can leave the table point rested in no longer starting where
+    ;; its rows were laid out from, as deleting the leading pipe of its first
+    ;; row or the newline before it does.  Every span of that layout then
+    ;; covers other text, so drop the table instead of drawing its rows back
+    ;; over the line point is editing; it is laid out again from the buffer.
+    (when (and previous
+               (not (org-table-widget--revealed-p (car previous)))
+               (not (org-table-widget--table-still-starts-p (car previous))))
+      (org-table-widget--drop-table (car previous))
+      (setq previous nil))
+    ;; Lay edited tables out once point has left the line it was edited on,
+    ;; rather than as the characters arrive.  Redrawing the table under the
+    ;; cursor while it is being typed into makes the rows around it jump, and
+    ;; a run of edits then costs one layout instead of one per character.
+    (when (and org-table-widget--dirty
+               (or (null previous-line)
+                   (/= previous-line (line-number-at-pos))))
+      (dolist (table (copy-sequence org-table-widget--dirty))
+        (org-table-widget--lay-out-edited table)))
+    ;; A table whose rows an edit dropped is drawn again even while point
+    ;; stays on the row being edited, so the rows around it never stay stale.
+    (when (and beg
+               (not (org-table-widget--revealed-p beg))
+               (null (org-table-widget--table-overlays beg)))
+      (org-table-widget--draw-table beg))
     ;; Both calls are no-ops when the row is already in the wanted state,
     ;; so a relayout that redrew the row under point is corrected here.
-    (let ((previous org-table-widget--point-row))
-      (setq org-table-widget--point-row row)
-      (unless (equal row previous)
-        (org-table-widget--show-row previous))
-      (when row
-        (org-table-widget--hide-row row)))))
+    (setq org-table-widget--point-row row)
+    (unless (equal row previous)
+      (org-table-widget--show-row previous))
+    (when row
+      (org-table-widget--hide-row row))))
 
 (defun org-table-widget--forget-revealed ()
   "Draw a revealed table again once point has left it."
